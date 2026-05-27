@@ -84,13 +84,8 @@ async function updateTerenMesaj(guild) {
         const ore = Math.floor(elapsed / 60);
         const min = elapsed % 60;
         const timp = ore > 0 ? `${ore}h ${min}min` : `${min} min`;
-        return `🔴 **${r.nume}**
-📍 ${r.locatie}${r.misiune ? `
-🎯 ${r.misiune}` : ''}
-⏱️ Pe teren de **${timp}**`;
-      }).join('
-
-')
+        return `🔴 **${r.nume}**\n📍 ${r.locatie}${r.misiune ? `\n🎯 ${r.misiune}` : ''}\n⏱️ Pe teren de **${timp}**`;
+      }).join('\n\n')
     );
     embed.setFooter({ text: `${activi.length} reporter${activi.length > 1 ? 'i' : ''} activ${activi.length > 1 ? 'i' : ''} · Actualizat` });
   }
@@ -672,10 +667,7 @@ client.on('interactionCreate', async interaction => {
     if (ch) {
       await ch.send({ embeds: [new EmbedBuilder()
         .setColor(GREEN)
-        .setDescription(`🟢 **${nume}** a intrat pe teren
-📍 **${locatie}**${misiune ? `
-🎯 ${misiune}` : ''}
-⏰ ${new Date().toLocaleTimeString('ro-RO', {hour:'2-digit',minute:'2-digit'})}`)
+        .setDescription(`🟢 **${nume}** a intrat pe teren\n📍 **${locatie}**${misiune ? `\n🎯 ${misiune}` : ''}\n⏰ ${new Date().toLocaleTimeString('ro-RO', {hour:'2-digit',minute:'2-digit'})}`)
         .setFooter({ text: 'REGORDER · Teren Live' })
         .setTimestamp()
       ]});
@@ -713,9 +705,7 @@ client.on('interactionCreate', async interaction => {
     if (ch) {
       await ch.send({ embeds: [new EmbedBuilder()
         .setColor(0x374151)
-        .setDescription(`⬛ **${nume}** a revenit din teren
-📍 **${info.locatie}** · ⏱️ **${timp}**${raport ? `
-📋 *${raport}*` : ''}`)
+        .setDescription(`⬛ **${nume}** a revenit din teren\n📍 **${info.locatie}** · ⏱️ **${timp}**${raport ? `\n📋 *${raport}*` : ''}`)
         .setFooter({ text: 'REGORDER · Teren Live' })
         .setTimestamp()
       ]});
@@ -738,11 +728,8 @@ client.on('interactionCreate', async interaction => {
         const ore = Math.floor(elapsed / 60);
         const min = elapsed % 60;
         const timp = ore > 0 ? `${ore}h ${min}min` : `${min} min`;
-        return `🔴 **${r.nume}** — 📍 ${r.locatie} · ⏱️ ${timp}${r.misiune ? `
-　🎯 ${r.misiune}` : ''}`;
-      }).join('
-
-'))
+        return `🔴 **${r.nume}** — 📍 ${r.locatie} · ⏱️ ${timp}${r.misiune ? `\n🎯 ${r.misiune}` : ''}`;
+      }).join('\n\n'))
       .setFooter({ text: `${activi.length} reporter${activi.length>1?'i':''} activ${activi.length>1?'i':''}` });
     await interaction.reply({ embeds:[embed] });
   }

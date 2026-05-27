@@ -15,6 +15,7 @@ let CH_ALERTE     = null;
 let CH_PUBLICATII = null;
 let CH_MISIUNI    = null;
 let CH_GENERAL    = null;
+let CH_TEREN      = null;
 let CAT_ECHIPE_ID = null;
 
 const sb = createClient(SUPA_URL, SUPA_KEY);
@@ -58,6 +59,53 @@ const MISIUNI = [
   { cat:5, catLabel:'Sindicatul — puterea din umbră', titlu:'Documentarul final — sinteza', tags:['Producție','Final'], status:'Planificat', pasi:['Compilare probe','Narațiune','Montaj și prezentare'] },
 ];
 
+// ── TEREN LIVE STORE ────────────────────────────────────
+// { userId: { nume, locatie, misiune, startTime, messageId } }
+const peTerenAcum = {};
+let terenMesajId = null; // ID-ul mesajului principal de status
+
+async function updateTerenMesaj(guild) {
+  const ch = guild.channels.cache.get(CH_TEREN);
+  if (!ch) return;
+
+  const activi = Object.values(peTerenAcum);
+
+  const embed = new EmbedBuilder()
+    .setColor(activi.length > 0 ? RED : 0x374151)
+    .setTitle('📡 REPORTERI ACTIVI PE TEREN')
+    .setTimestamp();
+
+  if (activi.length === 0) {
+    embed.setDescription('*Niciun reporter pe teren în acest moment.*');
+  } else {
+    embed.setDescription(
+      activi.map(r => {
+        const elapsed = Math.floor((Date.now() - r.startTime) / 60000);
+        const ore = Math.floor(elapsed / 60);
+        const min = elapsed % 60;
+        const timp = ore > 0 ? `${ore}h ${min}min` : `${min} min`;
+        return `🔴 **${r.nume}**
+📍 ${r.locatie}${r.misiune ? `
+🎯 ${r.misiune}` : ''}
+⏱️ Pe teren de **${timp}**`;
+      }).join('
+
+')
+    );
+    embed.setFooter({ text: `${activi.length} reporter${activi.length > 1 ? 'i' : ''} activ${activi.length > 1 ? 'i' : ''} · Actualizat` });
+  }
+
+  try {
+    if (terenMesajId) {
+      const msg = await ch.messages.fetch(terenMesajId).catch(() => null);
+      if (msg) { await msg.edit({ embeds: [embed] }); return; }
+    }
+    // Daca nu exista mesajul, creeaza unul nou
+    const msg = await ch.send({ embeds: [embed] });
+    terenMesajId = msg.id;
+  } catch(e) { console.error('Eroare update teren:', e.message); }
+}
+
 const CAT_COLORS = { 1:YELLOW, 2:YELLOW, 3:RED, 4:RED, 5:PURPLE };
 const CAT_EMOJI  = { 1:'🪚', 2:'💼', 3:'👮', 4:'🔴', 5:'👁️' };
 
@@ -83,7 +131,9 @@ async function setupCanale(guild) {
   const m = await ensure('🤖・comenzi',    'Comenzi bot — /misiuni /misiune /alert /top /sos');
   const g = await ensure('💬・general',    'Discuții generale echipă');
 
+  const t = await ensure('📡・teren-live',  'Reporteri activi pe teren — /teren-on /teren-off');
   CH_ALERTE = a.id; CH_PUBLICATII = p.id; CH_MISIUNI = m.id; CH_GENERAL = g.id;
+  CH_TEREN = t.id;
 
   // Categorie echipe
   let catE = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '🔴 ECHIPE ACTIVE');
@@ -181,6 +231,15 @@ async function registerCommands(guild) {
 
     new SlashCommandBuilder().setName('sos').setDescription('🆘 URGENȚĂ — alertă imediată pentru Admin și Șef Redacție')
       .addStringOption(o => o.setName('mesaj').setDescription('Situația de urgență').setRequired(true)),
+
+    new SlashCommandBuilder().setName('teren-on').setDescription('Anunță că ești pe teren')
+      .addStringOption(o => o.setName('locatie').setDescription('Locația ta').setRequired(true))
+      .addStringOption(o => o.setName('misiune').setDescription('Ce faci acolo').setRequired(false)),
+
+    new SlashCommandBuilder().setName('teren-off').setDescription('Anunță că ai terminat misiunea de teren')
+      .addStringOption(o => o.setName('raport').setDescription('Scurt raport — ce ai găsit').setRequired(false)),
+
+    new SlashCommandBuilder().setName('teren-status').setDescription('Vezi cine e activ pe teren acum'),
 
     new SlashCommandBuilder().setName('creaza-echipa').setDescription('Creează o echipă de investigație')
       .addStringOption(o => o.setName('nume').setDescription('Numele echipei').setRequired(true))
@@ -594,6 +653,100 @@ client.on('interactionCreate', async interaction => {
     await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ SOS trimis! Superiorii au fost alertați.')], ephemeral:true });
   }
 
+  // /teren-on
+  if (commandName === 'teren-on') {
+    const locatie = interaction.options.getString('locatie');
+    const misiune = interaction.options.getString('misiune');
+    const user    = interaction.user;
+    const member  = await guild.members.fetch(user.id);
+    const nume    = member.displayName || user.username;
+
+    peTerenAcum[user.id] = { nume, locatie, misiune, startTime: Date.now() };
+
+    // Rol Activ
+    const rolActiv = guild.roles.cache.find(r => r.name === '🟢 Activ');
+    if (rolActiv && !member.roles.cache.has(rolActiv.id)) await member.roles.add(rolActiv).catch(()=>{});
+
+    // Anunt in teren-live
+    const ch = guild.channels.cache.get(CH_TEREN);
+    if (ch) {
+      await ch.send({ embeds: [new EmbedBuilder()
+        .setColor(GREEN)
+        .setDescription(`🟢 **${nume}** a intrat pe teren
+📍 **${locatie}**${misiune ? `
+🎯 ${misiune}` : ''}
+⏰ ${new Date().toLocaleTimeString('ro-RO', {hour:'2-digit',minute:'2-digit'})}`)
+        .setFooter({ text: 'REGORDER · Teren Live' })
+        .setTimestamp()
+      ]});
+    }
+
+    await updateTerenMesaj(guild);
+    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription(`✓ Ești acum **pe teren** la ${locatie}. Echipa a fost notificată.`)], ephemeral:true });
+  }
+
+  // /teren-off
+  if (commandName === 'teren-off') {
+    const raport  = interaction.options.getString('raport');
+    const user    = interaction.user;
+    const member  = await guild.members.fetch(user.id);
+    const nume    = member.displayName || user.username;
+    const info    = peTerenAcum[user.id];
+
+    if (!info) {
+      await interaction.reply({ embeds:[new EmbedBuilder().setColor(RED).setDescription('✗ Nu ești înregistrat pe teren. Folosește `/teren-on` mai întâi.')], ephemeral:true });
+      return;
+    }
+
+    const elapsed = Math.floor((Date.now() - info.startTime) / 60000);
+    const ore = Math.floor(elapsed / 60);
+    const min = elapsed % 60;
+    const timp = ore > 0 ? `${ore}h ${min}min` : `${min} min`;
+
+    delete peTerenAcum[user.id];
+
+    // Scoate rol Activ
+    const rolActiv = guild.roles.cache.find(r => r.name === '🟢 Activ');
+    if (rolActiv && member.roles.cache.has(rolActiv.id)) await member.roles.remove(rolActiv).catch(()=>{});
+
+    const ch = guild.channels.cache.get(CH_TEREN);
+    if (ch) {
+      await ch.send({ embeds: [new EmbedBuilder()
+        .setColor(0x374151)
+        .setDescription(`⬛ **${nume}** a revenit din teren
+📍 **${info.locatie}** · ⏱️ **${timp}**${raport ? `
+📋 *${raport}*` : ''}`)
+        .setFooter({ text: 'REGORDER · Teren Live' })
+        .setTimestamp()
+      ]});
+    }
+
+    await updateTerenMesaj(guild);
+    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription(`✓ Misiune încheiată. Timp pe teren: **${timp}**`)], ephemeral:true });
+  }
+
+  // /teren-status
+  if (commandName === 'teren-status') {
+    const activi = Object.values(peTerenAcum);
+    if (!activi.length) {
+      await interaction.reply({ embeds:[new EmbedBuilder().setColor(0x374151).setDescription('*Niciun reporter pe teren în acest moment.*')], ephemeral:true });
+      return;
+    }
+    const embed = new EmbedBuilder().setColor(RED).setTitle('📡 TEREN STATUS')
+      .setDescription(activi.map(r => {
+        const elapsed = Math.floor((Date.now() - r.startTime) / 60000);
+        const ore = Math.floor(elapsed / 60);
+        const min = elapsed % 60;
+        const timp = ore > 0 ? `${ore}h ${min}min` : `${min} min`;
+        return `🔴 **${r.nume}** — 📍 ${r.locatie} · ⏱️ ${timp}${r.misiune ? `
+　🎯 ${r.misiune}` : ''}`;
+      }).join('
+
+'))
+      .setFooter({ text: `${activi.length} reporter${activi.length>1?'i':''} activ${activi.length>1?'i':''}` });
+    await interaction.reply({ embeds:[embed] });
+  }
+
   // /creaza-echipa
   if (commandName === 'creaza-echipa') {
     // Verifică grade
@@ -673,13 +826,15 @@ function startScheduler(guild) {
     if (acum.getHours() === 20 && acum.getMinutes() === 0) {
       await trimitRaportZilnic(guild);
     }
+    // Update mesaj teren live
+    await updateTerenMesaj(guild);
     // Polling publicatii
     await checkPublicatii(guild);
   }, 60_000);
 }
 
 // ── BOT READY ────────────────────────────────────────────
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`✓ Bot pornit ca ${client.user.tag}`);
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) { console.error('✗ Server negăsit!'); return; }

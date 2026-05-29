@@ -762,47 +762,205 @@ client.on('guildMemberAdd', async member => {
 });
 
 // ── POLLING PUBLICATII ───────────────────────────────────
-let lastArticolId = null;
-let lastDosarId   = null;
+// Tracks: { id, updated_at } for each table so we catch both new rows AND edits.
+// articole  → only when publicat=true
+// documentare → only when publicat=true
+// dosare    → every new dosar
+// probe     → every new probă
+// persoane  → every new persoană identificată
+// vehicule  → every new vehicul
+
+const lastSeen = {
+  articol:     { id: null, updated_at: null },
+  documentar:  { id: null, updated_at: null },
+  dosar:       { id: null, updated_at: null },
+  proba:       { id: null, updated_at: null },
+  persoana:    { id: null, updated_at: null },
+  vehicul:     { id: null, updated_at: null },
+};
 
 async function checkPublicatii(guild) {
   const ch = guild.channels.cache.get(CH_PUBLICATII);
   if (!ch) return;
 
-  const { data: articole } = await sb.from('articole').select('*').eq('publicat',true).order('created_at',{ascending:false}).limit(1);
-  if (articole?.length) {
-    const art = articole[0];
-    if (lastArticolId && art.id !== lastArticolId) {
-      const embed = new EmbedBuilder().setColor(RED)
-        .setTitle(`📰 ARTICOL NOU — ${art.titlu.toUpperCase()}`)
-        .setDescription(art.rezumat || (art.continut||'').slice(0,200)+'...' || '—')
-        .addFields(
-          { name:'✍️ Reporter', value:art.reporter||'—', inline:true },
-          { name:'📍 Locație', value:art.locatie||'—', inline:true },
-          { name:'📌 Status', value:art.status||'—', inline:true },
-        ).setFooter({ text:'REGORDER · Publicat pe site' }).setTimestamp(new Date(art.created_at));
-      if (art.tags?.length) embed.addFields({ name:'🏷️ Taguri', value:art.tags.map(t=>`\`${t}\``).join(' ') });
-      await ch.send({ embeds:[embed] });
-      await checkRealizari(guild, art.reporter);
-    }
-    lastArticolId = art.id;
-  }
+  // ── 1. ARTICOLE (doar publicate) ─────────────────────
+  try {
+    const { data: articole } = await sb.from('articole')
+      .select('*').eq('publicat', true)
+      .order('updated_at', { ascending: false }).limit(1);
 
-  const { data: dosare } = await sb.from('dosare').select('*').order('created_at',{ascending:false}).limit(1);
-  if (dosare?.length) {
-    const dos = dosare[0];
-    if (lastDosarId && dos.id !== lastDosarId) {
-      await ch.send({ embeds:[new EmbedBuilder().setColor(YELLOW)
-        .setTitle(`📂 DOSAR NOU — #${dos.numar} · ${dos.titlu.toUpperCase()}`)
-        .addFields(
-          { name:'📍 Locație', value:dos.locatie||'—', inline:true },
-          { name:'👤 Reporter', value:dos.reporter_principal||'—', inline:true },
-          { name:'📌 Status', value:dos.status||'—', inline:true },
-        ).setFooter({ text:'REGORDER · Dosar deschis' }).setTimestamp(new Date(dos.created_at))
-      ]});
+    if (articole?.length) {
+      const art = articole[0];
+      const prev = lastSeen.articol;
+      const isNew    = prev.id && art.id !== prev.id;
+      const isEdited = prev.id && art.id === prev.id && art.updated_at !== prev.updated_at;
+
+      if (isNew || isEdited) {
+        const embed = new EmbedBuilder()
+          .setColor(isNew ? RED : BLUE)
+          .setTitle(isNew
+            ? `📰 ARTICOL NOU — ${art.titlu.toUpperCase()}`
+            : `✏️ ARTICOL EDITAT — ${art.titlu.toUpperCase()}`)
+          .setDescription(art.rezumat || (art.continut || '').slice(0, 200) + '...' || '—')
+          .addFields(
+            { name: '✍️ Reporter', value: art.reporter || '—', inline: true },
+            { name: '📍 Locație',  value: art.locatie  || '—', inline: true },
+            { name: '📌 Status',   value: art.status   || '—', inline: true },
+          )
+          .setFooter({ text: isNew ? 'REGORDER · Articol publicat' : 'REGORDER · Articol actualizat' })
+          .setTimestamp(new Date(art.updated_at || art.created_at));
+        if (art.tags?.length) embed.addFields({ name: '🏷️ Taguri', value: art.tags.map(t => `\`${t}\``).join(' ') });
+        await ch.send({ embeds: [embed] });
+        if (isNew) await checkRealizari(guild, art.reporter);
+      }
+
+      lastSeen.articol = { id: art.id, updated_at: art.updated_at };
     }
-    lastDosarId = dos.id;
-  }
+  } catch(e) { console.error('Polling articole:', e.message); }
+
+  // ── 2. DOCUMENTARE (doar publicate) ──────────────────
+  try {
+    const { data: docs } = await sb.from('documentare')
+      .select('*').eq('publicat', true)
+      .order('updated_at', { ascending: false }).limit(1);
+
+    if (docs?.length) {
+      const doc = docs[0];
+      const prev = lastSeen.documentar;
+      const isNew    = prev.id && doc.id !== prev.id;
+      const isEdited = prev.id && doc.id === prev.id && doc.updated_at !== prev.updated_at;
+
+      if (isNew || isEdited) {
+        const embed = new EmbedBuilder()
+          .setColor(isNew ? PURPLE : BLUE)
+          .setTitle(isNew
+            ? `🎬 DOCUMENTAR NOU — ${doc.titlu.toUpperCase()}`
+            : `✏️ DOCUMENTAR EDITAT — ${doc.titlu.toUpperCase()}`)
+          .setDescription(doc.descriere || '—')
+          .addFields(
+            { name: '🎬 Regizor',  value: doc.regizor  || '—', inline: true },
+            { name: '📅 An',       value: doc.an       || '—', inline: true },
+            { name: '⏱️ Durată',   value: doc.durata   || '—', inline: true },
+            { name: '🎭 Gen',      value: doc.gen      || '—', inline: true },
+            { name: '📍 Locație',  value: doc.locatie  || '—', inline: true },
+            { name: '📌 Status',   value: doc.status   || '—', inline: true },
+          )
+          .setFooter({ text: isNew ? 'REGORDER · Documentar publicat' : 'REGORDER · Documentar actualizat' })
+          .setTimestamp(new Date(doc.updated_at || doc.created_at));
+        if (doc.tags?.length) embed.addFields({ name: '🏷️ Taguri', value: doc.tags.map(t => `\`${t}\``).join(' ') });
+        if (doc.link_video) embed.addFields({ name: '🔗 Video', value: doc.link_video });
+        await ch.send({ embeds: [embed] });
+      }
+
+      lastSeen.documentar = { id: doc.id, updated_at: doc.updated_at };
+    }
+  } catch(e) { console.error('Polling documentare:', e.message); }
+
+  // ── 3. DOSARE (orice dosar nou) ──────────────────────
+  try {
+    const { data: dosare } = await sb.from('dosare')
+      .select('*').order('created_at', { ascending: false }).limit(1);
+
+    if (dosare?.length) {
+      const dos = dosare[0];
+      const prev = lastSeen.dosar;
+
+      if (prev.id && dos.id !== prev.id) {
+        await ch.send({ embeds: [new EmbedBuilder().setColor(YELLOW)
+          .setTitle(`📂 DOSAR NOU — #${dos.numar} · ${dos.titlu.toUpperCase()}`)
+          .addFields(
+            { name: '📍 Locație',  value: dos.locatie            || '—', inline: true },
+            { name: '👤 Reporter', value: dos.reporter_principal || '—', inline: true },
+            { name: '📌 Status',   value: dos.status             || '—', inline: true },
+          )
+          .setFooter({ text: 'REGORDER · Dosar deschis' })
+          .setTimestamp(new Date(dos.created_at))
+        ]});
+      }
+
+      lastSeen.dosar = { id: dos.id, updated_at: null };
+    }
+  } catch(e) { console.error('Polling dosare:', e.message); }
+
+  // ── 4. PROBE (orice probă nouă) ──────────────────────
+  try {
+    const { data: probe } = await sb.from('probe')
+      .select('*').order('created_at', { ascending: false }).limit(1);
+
+    if (probe?.length) {
+      const proba = probe[0];
+      const prev  = lastSeen.proba;
+
+      if (prev.id && proba.id !== prev.id) {
+        await ch.send({ embeds: [new EmbedBuilder().setColor(GREEN)
+          .setTitle(`🔍 PROBĂ NOUĂ — ${(proba.numar ? `#${proba.numar} · ` : '') + proba.descriere.slice(0, 60).toUpperCase()}`)
+          .addFields(
+            { name: '✍️ Reporter', value: proba.reporter   || '—', inline: true },
+            { name: '📦 Tip',      value: proba.tip        || '—', inline: true },
+            { name: '📌 Status',   value: proba.status     || '—', inline: true },
+          )
+          .setFooter({ text: 'REGORDER · Probă înregistrată' })
+          .setTimestamp(new Date(proba.created_at))
+        ]});
+        await checkRealizari(guild, proba.reporter);
+      }
+
+      lastSeen.proba = { id: proba.id, updated_at: null };
+    }
+  } catch(e) { console.error('Polling probe:', e.message); }
+
+  // ── 5. PERSOANE (orice persoană nouă identificată) ───
+  try {
+    const { data: persoane } = await sb.from('persoane')
+      .select('*').order('created_at', { ascending: false }).limit(1);
+
+    if (persoane?.length) {
+      const per  = persoane[0];
+      const prev = lastSeen.persoana;
+
+      if (prev.id && per.id !== prev.id) {
+        await ch.send({ embeds: [new EmbedBuilder().setColor(YELLOW)
+          .setTitle(`🧑 PERSOANĂ NOUĂ — ${per.nume.toUpperCase()}`)
+          .addFields(
+            { name: '🎭 Rol',     value: per.rol    || '—', inline: true },
+            { name: '📌 Status',  value: per.status || '—', inline: true },
+            { name: '📝 Detalii', value: (per.detalii || '—').slice(0, 200), inline: false },
+          )
+          .setFooter({ text: 'REGORDER · Persoană identificată' })
+          .setTimestamp(new Date(per.created_at))
+        ]});
+      }
+
+      lastSeen.persoana = { id: per.id, updated_at: null };
+    }
+  } catch(e) { console.error('Polling persoane:', e.message); }
+
+  // ── 6. VEHICULE (orice vehicul nou) ──────────────────
+  try {
+    const { data: vehicule } = await sb.from('vehicule')
+      .select('*').order('created_at', { ascending: false }).limit(1);
+
+    if (vehicule?.length) {
+      const veh  = vehicule[0];
+      const prev = lastSeen.vehicul;
+
+      if (prev.id && veh.id !== prev.id) {
+        await ch.send({ embeds: [new EmbedBuilder().setColor(RED)
+          .setTitle(`🚗 VEHICUL NOU — ${veh.nr_inmatriculare.toUpperCase()}`)
+          .addFields(
+            { name: '🚘 Marcă',   value: veh.marca  || '—', inline: true },
+            { name: '🎨 Culoare', value: veh.culoare || '—', inline: true },
+            { name: '📦 Tip',     value: veh.tip     || '—', inline: true },
+            { name: '📝 Detalii', value: (veh.detalii || '—').slice(0, 200), inline: false },
+          )
+          .setFooter({ text: 'REGORDER · Vehicul înregistrat' })
+          .setTimestamp(new Date(veh.created_at))
+        ]});
+      }
+
+      lastSeen.vehicul = { id: veh.id, updated_at: null };
+    }
+  } catch(e) { console.error('Polling vehicule:', e.message); }
 }
 
 // ── SCHEDULER (verifică ora pentru raport zilnic) ────────
@@ -831,10 +989,21 @@ client.once('clientReady', async () => {
   await setupRoluri(guild);
   await registerCommands(guild);
 
-  const { data:a } = await sb.from('articole').select('id').eq('publicat',true).order('created_at',{ascending:false}).limit(1);
-  const { data:d } = await sb.from('dosare').select('id').order('created_at',{ascending:false}).limit(1);
-  if (a?.length) lastArticolId = a[0].id;
-  if (d?.length) lastDosarId   = d[0].id;
+  // Seed lastSeen so the first poll doesn't re-announce everything
+  const [sa, sdoc, sd, sp, sper, sv] = await Promise.all([
+    sb.from('articole').select('id, updated_at').eq('publicat',true).order('updated_at',{ascending:false}).limit(1),
+    sb.from('documentare').select('id, updated_at').eq('publicat',true).order('updated_at',{ascending:false}).limit(1),
+    sb.from('dosare').select('id').order('created_at',{ascending:false}).limit(1),
+    sb.from('probe').select('id').order('created_at',{ascending:false}).limit(1),
+    sb.from('persoane').select('id').order('created_at',{ascending:false}).limit(1),
+    sb.from('vehicule').select('id').order('created_at',{ascending:false}).limit(1),
+  ]);
+  if (sa?.data?.length)   lastSeen.articol    = { id: sa.data[0].id,   updated_at: sa.data[0].updated_at };
+  if (sdoc?.data?.length) lastSeen.documentar = { id: sdoc.data[0].id, updated_at: sdoc.data[0].updated_at };
+  if (sd?.data?.length)   lastSeen.dosar      = { id: sd.data[0].id,   updated_at: null };
+  if (sp?.data?.length)   lastSeen.proba      = { id: sp.data[0].id,   updated_at: null };
+  if (sper?.data?.length) lastSeen.persoana   = { id: sper.data[0].id, updated_at: null };
+  if (sv?.data?.length)   lastSeen.vehicul    = { id: sv.data[0].id,   updated_at: null };
 
   startScheduler(guild);
   console.log('✓ REGORDER Bot complet și gata!');

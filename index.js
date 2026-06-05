@@ -110,32 +110,535 @@ function c2r(hex, a=0.15) {
   return `rgba(${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)},${a})`;
 }
 
+
+// ── APLICARE SISTEM ──────────────────────────────────────
+let CH_APLICA    = null;  // canal unde lumea apasa butonul
+let CH_APL_ADMIN = null;  // canal privat unde ajung aplicatiile
+let CH_WELCOME   = null;  // canal welcome pentru noi veniti
+let ROLE_APLICANT = null; // rol dat automat la intrare
+
+// Grade care pot accepta/respinge aplicatii
+const GRADE_RECRUTARE = ['👑 Fondator', '🎙️ Șef Redacție', '🔐 Admin', '⚖️ Editor Șef'];
+
+// Pozitii disponibile pentru aplicare
+const POZITII_APLICARE = [
+  { label: '📹 Reporter de Investigații', value: 'reporter' },
+  { label: '📷 Fotograf / Cameraman', value: 'cameraman' },
+  { label: '🎬 Editor Video', value: 'editor_video' },
+  { label: '✍️ Redactor / Jurnalist', value: 'redactor' },
+  { label: '🔍 Researcher / Analist', value: 'researcher' },
+  { label: '🌐 Social Media Manager', value: 'social_media' },
+  { label: '🤝 Colaborator / Altul', value: 'colaborator' },
+];
+
+async function setupAplicare(guild) {
+  // Categorie aplicatii
+  let catApl = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '📥 APLICAȚII');
+  if (!catApl) catApl = await guild.channels.create({ name: '📥 APLICAȚII', type: ChannelType.GuildCategory });
+
+  // Canal cum-aplici (vizibil pentru toti)
+  let chInfo = guild.channels.cache.find(c => c.name === '📋・cum-aplici');
+  if (!chInfo) chInfo = await guild.channels.create({
+    name: '📋・cum-aplici', type: ChannelType.GuildText, parent: catApl.id,
+    topic: 'Informații despre cum poți face parte din echipa Regorder'
+  });
+
+  // Canal aplica-aici (vizibil pentru toti, doar botul scrie)
+  let chAplica = guild.channels.cache.find(c => c.name === '📩・aplică-aici');
+  if (!chAplica) chAplica = await guild.channels.create({
+    name: '📩・aplică-aici', type: ChannelType.GuildText, parent: catApl.id,
+    topic: 'Apasă butonul pentru a aplica în echipa Regorder'
+  });
+  CH_APLICA = chAplica.id;
+
+  // Canal aplicatii-primite (PRIVAT - doar admini)
+  const roleAdmin    = guild.roles.cache.find(r => r.name === '🔐 Admin');
+  const roleFondator = guild.roles.cache.find(r => r.name === '👑 Fondator');
+  const roleSef      = guild.roles.cache.find(r => r.name === '🎙️ Șef Redacție');
+  const roleEditor   = guild.roles.cache.find(r => r.name === '⚖️ Editor Șef');
+
+  const adminPerms = [
+    { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+    ...[roleAdmin, roleFondator, roleSef, roleEditor].filter(Boolean).map(r => ({
+      id: r.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
+    }))
+  ];
+
+  let chAdmin = guild.channels.cache.find(c => c.name === '🔏・aplicații-primite');
+  if (!chAdmin) chAdmin = await guild.channels.create({
+    name: '🔏・aplicații-primite', type: ChannelType.GuildText, parent: catApl.id,
+    topic: 'Aplicații primite de la candidați', permissionOverwrites: adminPerms
+  });
+  CH_APL_ADMIN = chAdmin.id;
+
+  // Canal status-aplicatie (vizibil pentru toti, readonly)
+  let chStatus = guild.channels.cache.find(c => c.name === '🔔・status-aplicație');
+  if (!chStatus) chStatus = await guild.channels.create({
+    name: '🔔・status-aplicație', type: ChannelType.GuildText, parent: catApl.id,
+    topic: 'Statusul aplicațiilor tale'
+  });
+
+  // Canal welcome
+  let catWelcome = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '👋 BINE AI VENIT');
+  if (!catWelcome) catWelcome = await guild.channels.create({ name: '👋 BINE AI VENIT', type: ChannelType.GuildCategory });
+
+  let chWelcome = guild.channels.cache.find(c => c.name === '👋・bine-ai-venit');
+  if (!chWelcome) chWelcome = await guild.channels.create({
+    name: '👋・bine-ai-venit', type: ChannelType.GuildText, parent: catWelcome.id,
+    topic: 'Bine ai venit pe serverul Regorder!'
+  });
+  CH_WELCOME = chWelcome.id;
+
+  // Rol Aplicant
+  let rolAplicant = guild.roles.cache.find(r => r.name === '📥 Aplicant');
+  if (!rolAplicant) rolAplicant = await guild.roles.create({
+    name: '📥 Aplicant', color: 0x6b7280, hoist: false, mentionable: false, reason: 'Rol implicit la intrare'
+  });
+  ROLE_APLICANT = rolAplicant.id;
+
+  // Restrictii pentru Aplicant - vad doar welcome si aplicatii
+  await guild.channels.cache.forEach(async ch => {
+    if (ch.type !== ChannelType.GuildText && ch.type !== ChannelType.GuildCategory) return;
+    const isPublic = ['📋・cum-aplici','📩・aplică-aici','🔔・status-aplicație','👋・bine-ai-venit'].includes(ch.name);
+    if (!isPublic && ch.type === ChannelType.GuildText) {
+      try {
+        await ch.permissionOverwrites.edit(rolAplicant.id, { ViewChannel: false });
+      } catch(e) {}
+    }
+  });
+
+  // Posteaza mesaj info in cum-aplici
+  const msgs = await chInfo.messages.fetch({ limit: 10 });
+  const hasBotMsg = msgs.some(m => m.author.id === guild.client.user.id);
+  if (!hasBotMsg) {
+    await chInfo.send({ embeds: [new EmbedBuilder()
+      .setColor(RED)
+      .setTitle('📋 CUM INTRI ÎN ECHIPA REGORDER')
+      .setDescription([
+        '**Regorder** este o echipă de jurnaliști și documentariști independenți.',
+        '',
+        'Dacă vrei să faci parte din proiect, urmează pașii de mai jos:',
+        '',
+        '**1.** Mergi în canalul <#' + chAplica.id + '>',
+        '**2.** Apasă butonul **APLICĂ ACUM**',
+        '**3.** Completează formularul cu datele tale',
+        '**4.** Echipa va analiza aplicația și te va contacta',
+        '',
+        '**Pozițiile disponibile:**',
+        POZITII_APLICARE.map(p => p.label).join('\n'),
+        '',
+        '> *Participarea este voluntară. Analizăm fiecare aplicație individual.*'
+      ].join('\n'))
+      .setFooter({ text: 'REGORDER · Echipă independentă de investigații' })
+    ]});
+  }
+
+  // Posteaza buton in aplica-aici
+  const msgsAplica = await chAplica.messages.fetch({ limit: 5 });
+  const hasBtnMsg = msgsAplica.some(m => m.author.id === guild.client.user.id && m.components?.length > 0);
+  if (!hasBtnMsg) {
+    await chAplica.send({
+      embeds: [new EmbedBuilder()
+        .setColor(RED)
+        .setTitle('📩 APLICĂ ÎN ECHIPA REGORDER')
+        .setDescription([
+          'Suntem o echipă de jurnaliști independenți care investigează subiecte de interes public.',
+          '',
+          '**Apasă butonul de mai jos** pentru a completa formularul de aplicare.',
+          '',
+          '> Aplicația ta ajunge direct la echipa editorială. Îți vom răspunde în cel mai scurt timp.'
+        ].join('\n'))
+        .setFooter({ text: 'REGORDER · Apasă butonul pentru a aplica' })
+      ],
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('btn_aplica')
+          .setLabel('📩 APLICĂ ACUM')
+          .setStyle(ButtonStyle.Danger)
+      )]
+    });
+  }
+
+  console.log('✓ Sistem aplicare gata');
+}
+
+// ── WELCOME AUTOMAT ──────────────────────────────────────
+async function welcomeMembru(member) {
+  // Da rol Aplicant automat
+  if (ROLE_APLICANT) {
+    try { await member.roles.add(ROLE_APLICANT); } catch(e) {}
+  }
+
+  // Mesaj in welcome
+  const chW = member.guild.channels.cache.get(CH_WELCOME);
+  if (chW) {
+    await chW.send({ embeds: [new EmbedBuilder()
+      .setColor(RED)
+      .setTitle(`👋 BUN VENIT, ${member.displayName.toUpperCase()}!`)
+      .setDescription([
+        `Salut <@${member.id}>! Bine ai venit pe serverul **REGORDER**.`,
+        '',
+        'Suntem o echipă de jurnaliști și documentariști independenți.',
+        '',
+        '**Ce poți face acum:**',
+        `📋 Citește <#${CH_APLICA ? (member.guild.channels.cache.find(c=>c.name==='📋・cum-aplici')?.id||'') : ''}> pentru a afla cum funcționăm`,
+        `📩 Aplică în echipă din canalul <#${CH_APLICA||''}> — apasă butonul **APLICĂ ACUM**`,
+        '',
+        '> *Dacă ai fost invitat direct de un membru, contactează un admin.*'
+      ].join('\n'))
+      .setThumbnail(member.user.displayAvatarURL())
+      .setFooter({ text: 'REGORDER · Investigații independente' })
+      .setTimestamp()
+    ]});
+  }
+
+  // DM cu instructiuni
+  try {
+    await member.send({ embeds: [new EmbedBuilder()
+      .setColor(RED)
+      .setTitle('📩 BINE AI VENIT PE SERVERUL REGORDER!')
+      .setDescription([
+        'Salut! Tocmai ai intrat pe serverul **REGORDER**.',
+        '',
+        'Pentru a accesa serverul complet, trebuie să aplici în echipă:',
+        '**1.** Intră pe server',
+        '**2.** Mergi în canalul 📩・aplică-aici',
+        '**3.** Apasă **APLICĂ ACUM** și completează formularul',
+        '',
+        'Aplicația ta va fi analizată de echipă și vei primi un răspuns.',
+        '',
+        '*— Echipa Regorder*'
+      ].join('\n'))
+      .setFooter({ text: 'REGORDER · Nu răspunde la acest mesaj' })
+    ]});
+  } catch(e) {} // DM-urile pot fi dezactivate
+}
+
+// ── HELPER: posteaza template daca nu exista deja ───────
+async function postTemplate(ch, embedFn, botId) {
+  const msgs = await ch.messages.fetch({ limit: 5 }).catch(() => null);
+  if (msgs && msgs.some(m => m.author.id === botId && m.embeds?.length > 0)) return;
+  await ch.send(embedFn());
+}
+
 // ── SETUP CANALE ─────────────────────────────────────────
 async function setupCanale(guild) {
-  let cat = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === 'REGORDER');
-  if (!cat) { cat = await guild.channels.create({ name:'REGORDER', type:ChannelType.GuildCategory }); }
-
-  const ensure = async (name, topic) => {
+  const ensure = async (name, topic, catId) => {
     let ch = guild.channels.cache.find(c => c.name === name);
-    if (!ch) ch = await guild.channels.create({ name, type:ChannelType.GuildText, parent:cat.id, topic });
+    if (!ch) ch = await guild.channels.create({ name, type:ChannelType.GuildText, parent:catId, topic });
     return ch;
   };
 
-  const a = await ensure('🚨・alerte',     'Alerte live din teren — /alert');
-  const p = await ensure('📰・publicații', 'Articole și dosare publicate');
-  const m = await ensure('🤖・comenzi',    'Comenzi bot — /misiuni /misiune /alert /top /sos');
-  const g = await ensure('💬・general',    'Discuții generale echipă');
+  // ── Categorie OFICIAL ──
+  let catOficial = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '📢 OFICIAL');
+  if (!catOficial) catOficial = await guild.channels.create({ name:'📢 OFICIAL', type:ChannelType.GuildCategory });
 
-  const t = await ensure('📡・teren-live',  'Reporteri activi pe teren — /teren-on /teren-off');
-  CH_ALERTE = a.id; CH_PUBLICATII = p.id; CH_MISIUNI = m.id; CH_GENERAL = g.id;
-  CH_TEREN = t.id;
+  const chReg  = await ensure('📌・regulament',  'Regulamentul serverului REGORDER', catOficial.id);
+  const chAnunt = await ensure('📣・anunțuri',   'Anunțuri oficiale echipă', catOficial.id);
+  const chLive  = await ensure('🔴・live-acum',  'Investigații live în desfășurare', catOficial.id);
 
-  // Categorie echipe
+  // ── Categorie REDACȚIE ──
+  let catRedactie = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '🗂 REDACȚIE');
+  if (!catRedactie) catRedactie = await guild.channels.create({ name:'🗂 REDACȚIE', type:ChannelType.GuildCategory });
+
+  const chProbe   = await ensure('🔍・probe-media',   'Template probe — foto/video/documente', catRedactie.id);
+  const chPers    = await ensure('🧑・persoane',       'Template persoane identificate', catRedactie.id);
+  const chVeh     = await ensure('🚗・vehicule',       'Template vehicule identificate', catRedactie.id);
+  const chRaport  = await ensure('📊・rapoarte',       'Rapoarte misiuni și activitate', catRedactie.id);
+  const chBriefing = await ensure('📋・briefing',      'Briefinguri înainte de misiune', catRedactie.id);
+  const chPub     = await ensure('📰・publicații',     'Articole și dosare publicate', catRedactie.id);
+
+  CH_PUBLICATII = chPub.id;
+
+  // ── Categorie TEREN ──
+  let catTeren = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '📡 TEREN');
+  if (!catTeren) catTeren = await guild.channels.create({ name:'📡 TEREN', type:ChannelType.GuildCategory });
+
+  const chTeren = await ensure('📡・teren-live',  'Reporteri activi — /teren-on /teren-off', catTeren.id);
+  const chAlerte = await ensure('🚨・alerte',     'Alerte urgente — /alert /sos', catTeren.id);
+  CH_TEREN = chTeren.id; CH_ALERTE = chAlerte.id;
+
+  // ── Categorie COMUNITATE ──
+  let catComun = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '💬 COMUNITATE');
+  if (!catComun) catComun = await guild.channels.create({ name:'💬 COMUNITATE', type:ChannelType.GuildCategory });
+
+  const chGeneral = await ensure('💬・general',      'Discuții generale echipă', catComun.id);
+  const chIdei    = await ensure('💡・idei-subiecte', 'Propuneri investigații', catComun.id);
+  const chComenzi = await ensure('🤖・comenzi',       'Comenzi bot', catComun.id);
+  CH_GENERAL = chGeneral.id; CH_MISIUNI = chComenzi.id;
+
+  // ── Categorie ECHIPE ──
   let catE = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '🔴 ECHIPE ACTIVE');
   if (!catE) catE = await guild.channels.create({ name:'🔴 ECHIPE ACTIVE', type:ChannelType.GuildCategory });
   CAT_ECHIPE_ID = catE.id;
 
-  console.log('✓ Canale gata');
+  // ── Posteaza regulament ──
+  await postTemplate(chReg, () => ({
+    embeds: [buildRegulament()]
+  }), guild.client.user.id);
+
+  // ── Posteaza template probe ──
+  await postTemplate(chProbe, () => ({
+    embeds: [buildTemplateProba()]
+  }), guild.client.user.id);
+
+  // ── Posteaza template persoane ──
+  await postTemplate(chPers, () => ({
+    embeds: [buildTemplatePersoana()]
+  }), guild.client.user.id);
+
+  // ── Posteaza template vehicule ──
+  await postTemplate(chVeh, () => ({
+    embeds: [buildTemplateVehicul()]
+  }), guild.client.user.id);
+
+  // ── Posteaza template raport ──
+  await postTemplate(chRaport, () => ({
+    embeds: [buildTemplateRaport()]
+  }), guild.client.user.id);
+
+  // ── Posteaza template briefing ──
+  await postTemplate(chBriefing, () => ({
+    embeds: [buildTemplateBriefing()]
+  }), guild.client.user.id);
+
+  console.log('✓ Canale si template-uri gata');
+}
+
+// ── REGULAMENT ───────────────────────────────────────────
+function buildRegulament() {
+  return new EmbedBuilder()
+    .setColor(RED)
+    .setAuthor({ name: 'REGORDER — Server Oficial', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png', url: 'https://regorder.live' })
+    .setThumbnail('https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png')
+    .setTitle('📜 REGULAMENTUL SERVERULUI')
+    .setDescription([
+      '> Bine ai venit pe serverul **REGORDER**.',
+      '> Citirea și respectarea acestui regulament este **obligatorie** pentru toți membrii.',
+      '',
+      '**§1 — COMPORTAMENT GENERAL**',
+      '`1.` Respectul reciproc este obligatoriu. Insultele, hărțuirea sau discriminarea duc la ban imediat.',
+      '`2.` Fără spam, flood sau conținut irelevant în canale.',
+      '`3.` Limbajul vulgar excesiv este interzis în canalele oficiale.',
+      '`4.` Fără promovare de servere externe fără acordul adminilor.',
+      '`5.` Avatarul și nickname-ul trebuie să fie adecvate.',
+      '',
+      '**§2 — CONFIDENȚIALITATE ȘI SECURITATE**',
+      '`6.` Informațiile din investigații sunt **strict confidențiale**. Nu le distribui în afara serverului.',
+      '`7.` Identitatea surselor nu se divulgă **niciodată**, nici intern.',
+      '`8.` Doxxingul (publicarea datelor personale) este interzis și duce la ban permanent.',
+      '`9.` Nu încerca să accesezi canale la care nu ai permisiune.',
+      '',
+      '**§3 — ACTIVITATE ÎN TEREN**',
+      '`10.` Folosește `/teren-on` înainte de orice misiune și `/teren-off` după.',
+      '`11.` Siguranța personală primează întotdeauna față de orice investigație.',
+      '`12.` Probele, declarațiile și documentele nu se falsifică niciodată.',
+      '`13.` Folosește `/sos` doar în urgențe reale. Abuzul duce la sancțiuni.',
+      '',
+      '**§4 — UTILIZAREA CANALELOR**',
+      '`14.` Postează doar conținut relevant în canalul respectiv.',
+      '`15.` Canalul `📣・anunțuri` este read-only. Reacțiile și discuțiile merg în `💬・general`.',
+      '`16.` Conținutul din canalele private de echipă nu se distribuie fără acordul liderului.',
+      '',
+      '**§5 — GRADE ȘI ROLURI**',
+      '`17.` Gradele se câștigă prin contribuție activă, nu se cer.',
+      '`18.` Respectă ierarhia — deciziile editoriale aparțin Fondatorului și Șefului de Redacție.',
+      '`19.` Aplicanții au acces limitat până la acceptarea aplicației. Nu ocoli restricțiile.',
+      '',
+      '**§6 — SANCȚIUNI**',
+      '`⚠️` Avertisment — prima abatere minoră',
+      '`🔇` Mute temporar — abateri repetate',
+      '`👢` Kick — abatere gravă',
+      '`🔨` Ban permanent — abatere foarte gravă sau doxxing',
+      '',
+      '> Prin rămânerea pe server confirmi că ai citit și ești de acord cu regulamentul.',
+      '> Regulamentul poate fi actualizat — modificările vor fi anunțate în `📣・anunțuri`.',
+    ].join('\n'))
+    .setFooter({ text: 'REGORDER · Investigații Independente · regorder.live', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+    .setTimestamp();
+}
+
+// ── TEMPLATE PROBĂ ────────────────────────────────────────
+function buildTemplateProba() {
+  return new EmbedBuilder()
+    .setColor(YELLOW)
+    .setAuthor({ name: 'REGORDER — Probe Media', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+    .setTitle('📋 TEMPLATE — CUM SE POSTEAZĂ O PROBĂ')
+    .setDescription([
+      '> Folosește acest format când postezi o probă media în thread-urile de echipă.',
+      '> Fiecare probă trebuie documentată corect pentru a fi folosită în investigație.',
+      '',
+      '```',
+      '📂 PROBĂ MEDIA — REGORDER',
+      '━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📌 Dosar:        #NR — Titlu dosar',
+      '🔢 Nr. probă:    P-001',
+      '📦 Tip:          VIDEO / FOTO / DOCUMENT / AUDIO',
+      '📅 Data:         ZZ/LL/AAAA — HH:MM',
+      '📍 Locație:      Unde a fost colectată',
+      '👤 Reporter:     Numele tău',
+      '━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📝 Descriere:',
+      'Ce surprinde această probă. Cât mai detaliat.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━',
+      '🔗 Link fișier:  (Google Drive / link direct)',
+      '✅ Status:       Neconfirmată / Confirmată',
+      '```',
+    ].join('\n'))
+    .addFields(
+      { name: '💡 Tipuri acceptate', value: 'VIDEO · FOTO · DOCUMENT · AUDIO · OBSERVAȚIE · MARTOR', inline: false },
+      { name: '⚠️ Important', value: 'Nu posta probe fără descriere. Probele fără context nu pot fi folosite în investigație.', inline: false },
+    )
+    .setFooter({ text: 'REGORDER · Template Probe · regorder.live', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' });
+}
+
+// ── TEMPLATE PERSOANĂ ─────────────────────────────────────
+function buildTemplatePersoana() {
+  return new EmbedBuilder()
+    .setColor(BLUE)
+    .setAuthor({ name: 'REGORDER — Persoane Identificate', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+    .setTitle('📋 TEMPLATE — CUM SE RAPORTEAZĂ O PERSOANĂ')
+    .setDescription([
+      '> Folosește acest format când identifici o persoană relevantă pentru o investigație.',
+      '> Informațiile sunt confidențiale și rămân pe server.',
+      '',
+      '```',
+      '🧑 PERSOANĂ IDENTIFICATĂ — REGORDER',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📌 Dosar:        #NR — Titlu dosar',
+      '👤 Nume:         Nume / Alias / Necunoscut',
+      '🎭 Rol:          Suspect / Complice / Martor / Informator',
+      '📅 Data:         ZZ/LL/AAAA — prima observație',
+      '📍 Locație:      Unde a fost observată',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📝 Descriere fizică:',
+      'Înălțime, constituție, îmbrăcăminte, trăsături distincte.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '🔗 Conexiuni:    Alte persoane / organizații asociate',
+      '📸 Probe:        Link foto/video dacă există',
+      '⚠️ Nivel risc:  Scăzut / Mediu / Ridicat',
+      '```',
+    ].join('\n'))
+    .addFields(
+      { name: '🔒 Confidențialitate', value: 'Datele din acest canal nu se distribuie în afara serverului fără aprobarea editorului șef.', inline: false },
+    )
+    .setFooter({ text: 'REGORDER · Template Persoane · regorder.live', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' });
+}
+
+// ── TEMPLATE VEHICUL ──────────────────────────────────────
+function buildTemplateVehicul() {
+  return new EmbedBuilder()
+    .setColor(RED)
+    .setAuthor({ name: 'REGORDER — Vehicule Identificate', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+    .setTitle('📋 TEMPLATE — CUM SE RAPORTEAZĂ UN VEHICUL')
+    .setDescription([
+      '> Folosește acest format când identifici un vehicul suspect sau relevant.',
+      '',
+      '```',
+      '🚗 VEHICUL IDENTIFICAT — REGORDER',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📌 Dosar:          #NR — Titlu dosar',
+      '🔢 Nr. înmatr.:    AB-12-CDE / Necunoscut',
+      '🚘 Marcă / Model:  Ex: Dacia Logan / ARO',
+      '🎨 Culoare:        Ex: Alb murdar, Negru mat',
+      '🏗️  Tip:            Autoturism / Camion / Dubă / ATV',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📅 Data:           ZZ/LL/AAAA — HH:MM',
+      '📍 Locație:        Unde a fost observat',
+      '👤 Ocupanți:       Nr. persoane / descriere dacă e posibil',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📝 Activitate observată:',
+      'Ce făcea vehiculul, ce transporta, comportament suspect.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📸 Probe:          Link foto/video placuță / vehicul',
+      '🔁 Frecvență:      Prima apariție / Repetat / Regulat',
+      '```',
+    ].join('\n'))
+    .setFooter({ text: 'REGORDER · Template Vehicule · regorder.live', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' });
+}
+
+// ── TEMPLATE RAPORT ───────────────────────────────────────
+function buildTemplateRaport() {
+  return new EmbedBuilder()
+    .setColor(GREEN)
+    .setAuthor({ name: 'REGORDER — Rapoarte', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+    .setTitle('📋 TEMPLATE — RAPORT DE MISIUNE')
+    .setDescription([
+      '> Completează acest raport după fiecare misiune de teren sau sesiune de investigație.',
+      '',
+      '```',
+      '📊 RAPORT MISIUNE — REGORDER',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📌 Dosar:         #NR — Titlu dosar',
+      '👤 Reporter:      Numele tău',
+      '📅 Data misiunii: ZZ/LL/AAAA',
+      '⏱️  Durată:        HH:MM — HH:MM (start — stop)',
+      '📍 Zonă acoperită: Locații vizitate',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '✅ Ce s-a realizat:',
+      'Descrie pe scurt ce ai făcut, ce ai observat.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '🔍 Probe colectate:',
+      'P-001: descriere scurtă',
+      'P-002: descriere scurtă',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '🧑 Persoane identificate:',
+      'Dacă există, menționează alias/rol.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '⚠️  Incidente / Riscuri:',
+      'Orice situație neașteptată sau pericol întâlnit.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📌 Pași următori:',
+      'Ce trebuie făcut în continuare pe acest dosar.',
+      '```',
+    ].join('\n'))
+    .setFooter({ text: 'REGORDER · Template Rapoarte · regorder.live', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' });
+}
+
+// ── TEMPLATE BRIEFING ─────────────────────────────────────
+function buildTemplateBriefing() {
+  return new EmbedBuilder()
+    .setColor(PURPLE)
+    .setAuthor({ name: 'REGORDER — Briefing', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+    .setTitle('📋 TEMPLATE — BRIEFING ÎNAINTE DE MISIUNE')
+    .setDescription([
+      '> Editorul șef sau liderul de echipă completează acest briefing înainte de orice misiune.',
+      '> Toți membrii echipei trebuie să confirme că l-au citit.',
+      '',
+      '```',
+      '📋 BRIEFING MISIUNE — REGORDER',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📌 Dosar:          #NR — Titlu dosar',
+      '🎯 Obiectiv:       Ce vrem să obținem din această misiune',
+      '📅 Data / Ora:     ZZ/LL/AAAA — HH:MM',
+      '📍 Locație:        Adresă / zonă exactă',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '👥 Echipă:',
+      '  🔴 Lider:        @Nume',
+      '  📹 Cameraman:    @Nume',
+      '  🎙️  Reporter:    @Nume',
+      '  🚗 Urmărire:     @Nume (dacă e cazul)',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '⚠️  Riscuri cunoscute:',
+      'Ce pericole pot apărea. Cum le evităm.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '🔧 Echipament necesar:',
+      'Camera, microfon, baterii, legitimație etc.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '📡 Protocol comunicare:',
+      '  • Check-in la sosire: /teren-on',
+      '  • Urgențe: /sos',
+      '  • Check-out: /teren-off + raport',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '🎯 Probe prioritare:',
+      '1. Ce trebuie filmat/fotografiat obligatoriu',
+      '2. Alte probe dorite dacă e posibil',
+      '```',
+    ].join('\n'))
+    .addFields(
+      { name: '✅ Confirmare', value: 'Toți membrii echipei reacționează cu ✅ la acest mesaj pentru a confirma că l-au citit.', inline: false },
+    )
+    .setFooter({ text: 'REGORDER · Template Briefing · regorder.live', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' });
 }
 
 // ── SETUP ROLURI ─────────────────────────────────────────
@@ -205,11 +708,6 @@ async function registerCommands(guild) {
       .addStringOption(o => o.setName('mesaj').setDescription('Mesajul').setRequired(true))
       .addStringOption(o => o.setName('locatie').setDescription('Locația').setRequired(false)),
 
-    new SlashCommandBuilder().setName('misiuni').setDescription('Afișează roadmap-ul complet'),
-
-    new SlashCommandBuilder().setName('misiune').setDescription('Detalii despre o misiune')
-      .addStringOption(o => o.setName('nume').setDescription('Numele misiunii').setRequired(true)),
-
     new SlashCommandBuilder().setName('stats').setDescription('Statistici Regorder live'),
 
     new SlashCommandBuilder().setName('top').setDescription('Clasament reporteri după probe'),
@@ -245,6 +743,32 @@ async function registerCommands(guild) {
       .addUserOption(o => o.setName('membru3').setDescription('Membru 3').setRequired(false))
       .addUserOption(o => o.setName('membru4').setDescription('Membru 4').setRequired(false)),
   ];
+
+
+    new SlashCommandBuilder().setName('accept').setDescription('Acceptă un aplicant în echipă')
+      .addUserOption(o => o.setName('user').setDescription('Utilizatorul de acceptat').setRequired(true))
+      .addStringOption(o => o.setName('pozitie').setDescription('Poziția acordată').setRequired(true)
+        .addChoices(
+          { name: '📹 Reporter', value: '📹 Reporter' },
+          { name: '🔍 Investigator', value: '🔍 Investigator' },
+          { name: '📷 Fotograf', value: '📸 Fotograf' },
+          { name: '🎬 Cameraman', value: '🎬 Cameraman' },
+          { name: '✍️ Editor', value: '✍️ Editor' },
+          { name: '🔊 PR & Comunicare', value: '🔊 PR & Comunicare' },
+          { name: '🤝 Colaborator', value: '🤝 Colaborator' },
+        ))
+      .addStringOption(o => o.setName('mesaj').setDescription('Mesaj opțional pentru candidat').setRequired(false)),
+
+    new SlashCommandBuilder().setName('respinge').setDescription('Respinge un aplicant')
+      .addUserOption(o => o.setName('user').setDescription('Utilizatorul de respins').setRequired(true))
+      .addStringOption(o => o.setName('motiv').setDescription('Motivul respingerii').setRequired(false)),
+
+    new SlashCommandBuilder().setName('aplicatii').setDescription('Vezi aplicațiile în așteptare (doar admin)'),
+
+    new SlashCommandBuilder().setName('whois').setDescription('Informații despre un membru')
+      .addUserOption(o => o.setName('user').setDescription('Utilizatorul').setRequired(true)),
+
+    new SlashCommandBuilder().setName('statistici').setDescription('Statistici complete server + Supabase'),
 
   await guild.commands.set(cmds);
   console.log('✓ Comenzi slash înregistrate');
@@ -473,8 +997,8 @@ async function creeazaEchipa(interaction, guild) {
 
 // ── INTERACTION HANDLER ──────────────────────────────────
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-  const { commandName, guild } = interaction;
+  const { guild } = interaction;
+  const commandName = interaction.isChatInputCommand() ? interaction.commandName : null;
 
   // /alert
   if (commandName === 'alert') {
@@ -490,6 +1014,344 @@ client.on('interactionCreate', async interaction => {
     const ch = guild.channels.cache.get(CH_ALERTE);
     if (ch) await ch.send({ content:'@everyone', embeds:[embed] });
     await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ Alertă trimisă!')], ephemeral:true });
+  }
+
+
+  // ── BUTON APLICĂ ────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === 'btn_aplica') {
+    const modal = new ModalBuilder()
+      .setCustomId('modal_aplicare')
+      .setTitle('📩 Aplicare Echipa Regorder');
+
+    const numeInput = new TextInputBuilder()
+      .setCustomId('apl_nume').setLabel('Numele tău complet')
+      .setStyle(TextInputStyle.Short).setPlaceholder('Ex: Ion Popescu').setRequired(true);
+
+    const pozitieInput = new TextInputBuilder()
+      .setCustomId('apl_pozitie').setLabel('Poziția dorită')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Reporter, Cameraman, Editor, Researcher etc.')
+      .setRequired(true);
+
+    const experientaInput = new TextInputBuilder()
+      .setCustomId('apl_experienta').setLabel('Experiența ta relevantă')
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder('Descrie pe scurt experiența ta în jurnalism, video, cercetare etc.')
+      .setMinLength(20).setRequired(true);
+
+    const motivatieInput = new TextInputBuilder()
+      .setCustomId('apl_motivatie').setLabel('De ce vrei să te alături Regorder?')
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder('Ce te motivează să faci parte din această echipă?')
+      .setMinLength(20).setRequired(true);
+
+    const contactInput = new TextInputBuilder()
+      .setCustomId('apl_contact').setLabel('Contact (telefon / email opțional)')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Opțional — pentru a te putea contacta mai ușor')
+      .setRequired(false);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(numeInput),
+      new ActionRowBuilder().addComponents(pozitieInput),
+      new ActionRowBuilder().addComponents(experientaInput),
+      new ActionRowBuilder().addComponents(motivatieInput),
+      new ActionRowBuilder().addComponents(contactInput),
+    );
+    return interaction.showModal(modal);
+  }
+
+  // ── MODAL SUBMIT APLICARE ────────────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId === 'modal_aplicare') {
+    const nume       = interaction.fields.getTextInputValue('apl_nume');
+    const pozitie    = interaction.fields.getTextInputValue('apl_pozitie');
+    const experienta = interaction.fields.getTextInputValue('apl_experienta');
+    const motivatie  = interaction.fields.getTextInputValue('apl_motivatie');
+    const contact    = interaction.fields.getTextInputValue('apl_contact') || '—';
+
+    // Salveaza in Supabase
+    await sb.from('aplicatii').insert({
+      nume, pozitie, experienta,
+      scrisoare: motivatie,
+      telefon: contact,
+      status: 'nou',
+      created_at: new Date().toISOString()
+    }).catch(e => console.error('Supabase aplicare:', e.message));
+
+    // Embed pentru canal admin
+    const embedAdmin = new EmbedBuilder()
+      .setColor(YELLOW)
+      .setTitle('📥 APLICAȚIE NOUĂ')
+      .setDescription(`De la <@${interaction.user.id}> — **${interaction.user.tag}**`)
+      .addFields(
+        { name: '👤 Nume', value: nume, inline: true },
+        { name: '🎯 Poziție dorită', value: pozitie, inline: true },
+        { name: '📞 Contact', value: contact, inline: true },
+        { name: '💼 Experiență', value: experienta.slice(0, 500), inline: false },
+        { name: '💬 Motivație', value: motivatie.slice(0, 500), inline: false },
+      )
+      .setFooter({ text: `ID: ${interaction.user.id} · ${new Date().toLocaleDateString('ro-RO')}` })
+      .setTimestamp();
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`apl_accept_${interaction.user.id}_${pozitie}`).setLabel('✓ ACCEPTĂ').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`apl_respinge_${interaction.user.id}`).setLabel('✗ RESPINGE').setStyle(ButtonStyle.Danger),
+    );
+
+    const chAdmin = guild.channels.cache.get(CH_APL_ADMIN);
+    if (chAdmin) await chAdmin.send({ embeds: [embedAdmin], components: [row] });
+
+    // Pinguri admini
+    const roleAdmin = guild.roles.cache.find(r => r.name === '🔐 Admin');
+    const roleSef   = guild.roles.cache.find(r => r.name === '🎙️ Șef Redacție');
+    if (chAdmin && (roleAdmin || roleSef)) {
+      await chAdmin.send(`📥 Aplicație nouă de la **${nume}** pentru **${pozitie}**! ${roleAdmin?`<@&${roleAdmin.id}>`:''}${roleSef?` <@&${roleSef.id}>`:''}`)
+        .then(m => setTimeout(() => m.delete().catch(()=>{}), 5000));
+    }
+
+    return interaction.reply({ embeds: [new EmbedBuilder()
+      .setColor(GREEN)
+      .setTitle('✓ APLICAȚIE TRIMISĂ!')
+      .setDescription([
+        `Mulțumim, **${nume}**! Aplicația ta a fost primită.`,
+        '',
+        `**Poziția aplicată:** ${pozitie}`,
+        '',
+        'Echipa va analiza aplicația și te va contacta în cel mai scurt timp.',
+        'Poți urmări statusul în canalul 🔔・status-aplicație.'
+      ].join('\n'))
+      .setFooter({ text: 'REGORDER · Îți mulțumim pentru interes!' })
+    ], ephemeral: true });
+  }
+
+  // ── BUTOANE ACCEPT/RESPINGE DIN CANAL ADMIN ──────────────
+  if (interaction.isButton() && interaction.customId.startsWith('apl_accept_')) {
+    const canAccept = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
+    if (!canAccept) return interaction.reply({ content: '❌ Nu ai permisiunea să accepți aplicații.', ephemeral: true });
+
+    const parts   = interaction.customId.split('_');
+    const userId  = parts[2];
+    const pozitie = parts.slice(3).join('_').replace(/_/g,' ');
+
+    const member = guild.members.cache.get(userId);
+    if (!member) return interaction.reply({ content: '❌ Utilizatorul nu mai e pe server.', ephemeral: true });
+
+    // Da rol pozitie
+    const rolPoz = guild.roles.cache.find(r => r.name === pozitie);
+    const rolAplicant = guild.roles.cache.find(r => r.name === '📥 Aplicant');
+    if (rolPoz) await member.roles.add(rolPoz).catch(()=>{});
+    if (rolAplicant) await member.roles.remove(rolAplicant).catch(()=>{});
+
+    // DM la candidat
+    try {
+      await member.send({ embeds: [new EmbedBuilder()
+        .setColor(GREEN)
+        .setTitle('🎉 APLICAȚIA TA A FOST ACCEPTATĂ!')
+        .setDescription([
+          `Felicitări! Ai fost acceptat în echipa **REGORDER** ca **${pozitie}**!`,
+          '',
+          'Acum ai acces complet la server. Bun venit în echipă!',
+          '',
+          '*— Echipa Regorder*'
+        ].join('\n'))
+        .setFooter({ text: 'REGORDER · Bun venit în echipă!' })
+      ]});
+    } catch(e) {}
+
+    // Anunt in general
+    const chGeneral = guild.channels.cache.get(CH_GENERAL);
+    if (chGeneral) await chGeneral.send({ embeds: [new EmbedBuilder()
+      .setColor(GREEN)
+      .setDescription(`🎉 <@${userId}> s-a alăturat echipei ca **${pozitie}**! Bun venit! 👏`)
+    ]});
+
+    // Update mesaj admin
+    await interaction.update({ components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('done').setLabel(`✓ Acceptat de ${interaction.user.username}`).setStyle(ButtonStyle.Success).setDisabled(true)
+    )]});
+
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith('apl_respinge_')) {
+    const canReject = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
+    if (!canReject) return interaction.reply({ content: '❌ Nu ai permisiunea să respecți aplicații.', ephemeral: true });
+
+    const userId = interaction.customId.split('_')[2];
+    const member = guild.members.cache.get(userId);
+
+    if (member) {
+      try {
+        await member.send({ embeds: [new EmbedBuilder()
+          .setColor(RED)
+          .setTitle('📋 STATUS APLICAȚIE REGORDER')
+          .setDescription([
+            'Îți mulțumim pentru interesul față de echipa **REGORDER**.',
+            '',
+            'Din păcate, în urma analizei, nu am putut accepta aplicația ta în acest moment.',
+            '',
+            'Te încurajăm să aplici din nou în viitor dacă situația se schimbă.',
+            '',
+            '*— Echipa Regorder*'
+          ].join('\n'))
+          .setFooter({ text: 'REGORDER · Mulțumim pentru interes' })
+        ]});
+      } catch(e) {}
+    }
+
+    await interaction.update({ components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('done').setLabel(`✗ Respins de ${interaction.user.username}`).setStyle(ButtonStyle.Danger).setDisabled(true)
+    )]});
+    return;
+  }
+
+  if (!interaction.isChatInputCommand()) return;
+
+  // /accept (slash command)
+  if (commandName === 'accept') {
+    const canAccept = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
+    if (!canAccept) return interaction.reply({ content: '❌ Doar ' + GRADE_RECRUTARE.join(', ') + ' pot accepta membri.', ephemeral: true });
+
+    const target  = interaction.options.getUser('user');
+    const pozitie = interaction.options.getString('pozitie');
+    const mesaj   = interaction.options.getString('mesaj') || '';
+    const member  = guild.members.cache.get(target.id);
+    if (!member) return interaction.reply({ content: '❌ Utilizatorul nu e pe server.', ephemeral: true });
+
+    const rolPoz      = guild.roles.cache.find(r => r.name === pozitie);
+    const rolAplicant = guild.roles.cache.find(r => r.name === '📥 Aplicant');
+    if (rolPoz) await member.roles.add(rolPoz).catch(()=>{});
+    if (rolAplicant) await member.roles.remove(rolAplicant).catch(()=>{});
+
+    try {
+      await member.send({ embeds: [new EmbedBuilder()
+        .setColor(GREEN)
+        .setTitle('🎉 APLICAȚIA TA A FOST ACCEPTATĂ!')
+        .setDescription([
+          `Felicitări! Ai fost acceptat în echipa **REGORDER** ca **${pozitie}**!`,
+          mesaj ? `
+**Mesaj de la echipă:** ${mesaj}` : '',
+          '',
+          'Acum ai acces complet la server. Bun venit în echipă!',
+        ].filter(Boolean).join('\n'))
+      ]});
+    } catch(e) {}
+
+    const chGeneral = guild.channels.cache.get(CH_GENERAL);
+    if (chGeneral) await chGeneral.send({ embeds: [new EmbedBuilder()
+      .setColor(GREEN)
+      .setDescription(`🎉 <@${target.id}> s-a alăturat echipei ca **${pozitie}**! Bun venit! 👏`)
+    ]});
+
+    return interaction.reply({ embeds: [new EmbedBuilder()
+      .setColor(GREEN).setDescription(`✓ <@${target.id}> a fost acceptat ca **${pozitie}**.`)
+    ], ephemeral: true });
+  }
+
+  // /respinge (slash command)
+  if (commandName === 'respinge') {
+    const canReject = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
+    if (!canReject) return interaction.reply({ content: '❌ Doar ' + GRADE_RECRUTARE.join(', ') + ' pot respinge aplicanți.', ephemeral: true });
+
+    const target = interaction.options.getUser('user');
+    const motiv  = interaction.options.getString('motiv') || 'Niciun motiv specificat.';
+    const member = guild.members.cache.get(target.id);
+
+    if (member) {
+      try {
+        await member.send({ embeds: [new EmbedBuilder()
+          .setColor(RED)
+          .setTitle('📋 STATUS APLICAȚIE REGORDER')
+          .setDescription([
+            'Îți mulțumim pentru interesul față de echipa **REGORDER**.',
+            '',
+            'Din păcate, nu am putut accepta aplicația ta în acest moment.',
+            motiv !== 'Niciun motiv specificat.' ? `
+**Motiv:** ${motiv}` : '',
+            '',
+            'Te încurajăm să aplici din nou în viitor.',
+            '*— Echipa Regorder*'
+          ].filter(Boolean).join('\n'))
+        ]});
+      } catch(e) {}
+    }
+
+    return interaction.reply({ embeds: [new EmbedBuilder()
+      .setColor(RED).setDescription(`✓ <@${target.id}> a fost respins. Motiv: ${motiv}`)
+    ], ephemeral: true });
+  }
+
+  // /aplicatii
+  if (commandName === 'aplicatii') {
+    const canView = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
+    if (!canView) return interaction.reply({ content: '❌ Acces restricționat.', ephemeral: true });
+
+    const { data } = await sb.from('aplicatii').select('*').eq('status','nou').order('created_at',{ascending:false}).limit(10);
+    if (!data?.length) return interaction.reply({ embeds: [new EmbedBuilder().setColor(GREEN).setDescription('✓ Nu există aplicații noi.')], ephemeral: true });
+
+    const embed = new EmbedBuilder()
+      .setColor(YELLOW)
+      .setTitle(`📥 APLICAȚII ÎN AȘTEPTARE — ${data.length}`)
+      .setDescription(data.map((a,i) => [
+        `**${i+1}. ${a.nume}** — ${a.pozitie}`,
+        `📅 ${new Date(a.created_at).toLocaleDateString('ro-RO')}`,
+      ].join(' · ')).join('\n'))
+      .setFooter({ text: `Mergi în ${CH_APL_ADMIN ? '#aplicații-primite' : 'canalul admin'} pentru detalii` });
+
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  // /whois
+  if (commandName === 'whois') {
+    const target = interaction.options.getUser('user');
+    const member = guild.members.cache.get(target.id);
+    if (!member) return interaction.reply({ content: '❌ Utilizatorul nu e pe server.', ephemeral: true });
+
+    const roluri = member.roles.cache.filter(r => r.name !== '@everyone').map(r => r.name).join(', ') || 'Niciun rol';
+    const embed = new EmbedBuilder()
+      .setColor(BLUE)
+      .setTitle(`👤 ${member.displayName}`)
+      .setThumbnail(target.displayAvatarURL())
+      .addFields(
+        { name: '🏷️ Username', value: target.tag, inline: true },
+        { name: '📅 Pe server din', value: member.joinedAt?.toLocaleDateString('ro-RO') || '—', inline: true },
+        { name: '🎂 Cont creat', value: target.createdAt.toLocaleDateString('ro-RO'), inline: true },
+        { name: '🎭 Roluri', value: roluri.slice(0, 500), inline: false },
+      )
+      .setFooter({ text: `ID: ${target.id}` });
+
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  // /statistici
+  if (commandName === 'statistici') {
+    const [r1, r2, r3, r4, r5] = await Promise.all([
+      sb.from('dosare').select('id',{count:'exact'}).eq('status','activ'),
+      sb.from('probe').select('id',{count:'exact'}),
+      sb.from('articole').select('id',{count:'exact'}).eq('publicat',true),
+      sb.from('documentare').select('id',{count:'exact'}).eq('publicat',true),
+      sb.from('aplicatii').select('id',{count:'exact'}).eq('status','nou'),
+    ]);
+    const totalMembri = guild.memberCount;
+    const membriOnline = guild.members.cache.filter(m => m.presence?.status === 'online').size;
+
+    const embed = new EmbedBuilder()
+      .setColor(RED)
+      .setTitle('📊 STATISTICI REGORDER')
+      .addFields(
+        { name: '👥 Membri server', value: String(totalMembri), inline: true },
+        { name: '🟢 Online acum', value: String(membriOnline), inline: true },
+        { name: '📥 Aplicații noi', value: String(r5.count||0), inline: true },
+        { name: '📂 Dosare active', value: String(r1.count||0), inline: true },
+        { name: '🔍 Probe totale', value: String(r2.count||0), inline: true },
+        { name: '📰 Articole publicate', value: String(r3.count||0), inline: true },
+        { name: '🎬 Documentare', value: String(r4.count||0), inline: true },
+        { name: '🗺️ Misiuni roadmap', value: String(MISIUNI.length), inline: true },
+      )
+      .setFooter({ text: 'REGORDER · Date live din Supabase' })
+      .setTimestamp();
+
+    return interaction.reply({ embeds: [embed] });
   }
 
   // /misiuni
@@ -987,6 +1849,7 @@ client.once('clientReady', async () => {
   await guild.members.fetch();
   await setupCanale(guild);
   await setupRoluri(guild);
+  await setupAplicare(guild);
   await registerCommands(guild);
 
   // Seed lastSeen so the first poll doesn't re-announce everything
@@ -1007,6 +1870,12 @@ client.once('clientReady', async () => {
 
   startScheduler(guild);
   console.log('✓ REGORDER Bot complet și gata!');
+});
+
+
+// ── WELCOME AUTOMAT ──────────────────────────────────────
+client.on('guildMemberAdd', async member => {
+  try { await welcomeMembru(member); } catch(e) { console.error('Welcome error:', e.message); }
 });
 
 client.login(TOKEN);

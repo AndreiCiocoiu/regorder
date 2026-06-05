@@ -197,15 +197,28 @@ async function setupAplicare(guild) {
   ROLE_APLICANT = rolAplicant.id;
 
   // Restrictii pentru Aplicant - vad doar welcome si aplicatii
-  await guild.channels.cache.forEach(async ch => {
-    if (ch.type !== ChannelType.GuildText && ch.type !== ChannelType.GuildCategory) return;
-    const isPublic = ['📋・cum-aplici','📩・aplică-aici','🔔・status-aplicație','👋・bine-ai-venit'].includes(ch.name);
-    if (!isPublic && ch.type === ChannelType.GuildText) {
+  const canalePublice = ['📋・cum-aplici', '📩・aplică-aici', '🔔・status-aplicație', '👋・bine-ai-venit'];
+  for (const [, ch] of guild.channels.cache) {
+    if (ch.type !== ChannelType.GuildText) continue;
+    const isPublic = canalePublice.includes(ch.name);
+    if (!isPublic) {
       try {
         await ch.permissionOverwrites.edit(rolAplicant.id, { ViewChannel: false });
+        await new Promise(r => setTimeout(r, 100));
       } catch(e) {}
     }
-  });
+  }
+  // Restrictii categorii
+  for (const [, ch] of guild.channels.cache) {
+    if (ch.type !== ChannelType.GuildCategory) continue;
+    const catPublice = ['📥 APLICAȚII', '👋 BINE AI VENIT'];
+    if (!catPublice.includes(ch.name)) {
+      try {
+        await ch.permissionOverwrites.edit(rolAplicant.id, { ViewChannel: false });
+        await new Promise(r => setTimeout(r, 100));
+      } catch(e) {}
+    }
+  }
 
   // Posteaza mesaj info in cum-aplici
   const msgs = await chInfo.messages.fetch({ limit: 10 });
@@ -986,17 +999,18 @@ async function creeazaEchipa(interaction, guild) {
 
   echipeTimere[forum.id] = timerId;
 
-  // Raspuns comanda
-  await interaction.reply({ embeds: [new EmbedBuilder()
+  // Raspuns comanda (folosim editReply deoarece s-a facut deferReply inainte)
+  await interaction.editReply({ embeds: [new EmbedBuilder()
     .setColor(GREEN)
     .setTitle(`✓ ECHIPA #${echipaId} CREATĂ`)
     .setDescription(`Canal: <#${canalEchipa.id}>\nForum probe: <#${forum.id}>\nMembri: ${[lider,...membri].map(m=>`<@${m.id}>`).join(' ')}`)
     .setFooter({ text: 'Forum se șterge automat dacă e gol în 48h' })
-  ], ephemeral: true });
+  ] });
 }
 
 // ── INTERACTION HANDLER ──────────────────────────────────
 client.on('interactionCreate', async interaction => {
+  try {
   const { guild } = interaction;
   const commandName = interaction.isChatInputCommand() ? interaction.commandName : null;
 
@@ -1013,7 +1027,7 @@ client.on('interactionCreate', async interaction => {
       ).setFooter({ text:'REGORDER · INVESTIGAȚIE ACTIVĂ' }).setTimestamp();
     const ch = guild.channels.cache.get(CH_ALERTE);
     if (ch) await ch.send({ content:'@everyone', embeds:[embed] });
-    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ Alertă trimisă!')], ephemeral:true });
+    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ Alertă trimisă!')], flags: 64 });
   }
 
 
@@ -1070,13 +1084,15 @@ client.on('interactionCreate', async interaction => {
     const contact    = interaction.fields.getTextInputValue('apl_contact') || '—';
 
     // Salveaza in Supabase
-    await sb.from('aplicatii').insert({
-      nume, pozitie, experienta,
-      scrisoare: motivatie,
-      telefon: contact,
-      status: 'nou',
-      created_at: new Date().toISOString()
-    }).catch(e => console.error('Supabase aplicare:', e.message));
+    try {
+      await sb.from('aplicatii').insert({
+        nume, pozitie, experienta,
+        scrisoare: motivatie,
+        telefon: contact,
+        status: 'nou',
+        created_at: new Date().toISOString()
+      });
+    } catch(e) { console.error('Supabase aplicare:', e.message); }
 
     // Embed pentru canal admin
     const embedAdmin = new EmbedBuilder()
@@ -1121,20 +1137,20 @@ client.on('interactionCreate', async interaction => {
         'Poți urmări statusul în canalul 🔔・status-aplicație.'
       ].join('\n'))
       .setFooter({ text: 'REGORDER · Îți mulțumim pentru interes!' })
-    ], ephemeral: true });
+    ], flags: 64 });
   }
 
   // ── BUTOANE ACCEPT/RESPINGE DIN CANAL ADMIN ──────────────
   if (interaction.isButton() && interaction.customId.startsWith('apl_accept_')) {
     const canAccept = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
-    if (!canAccept) return interaction.reply({ content: '❌ Nu ai permisiunea să accepți aplicații.', ephemeral: true });
+    if (!canAccept) return interaction.reply({ content: '❌ Nu ai permisiunea să accepți aplicații.', flags: 64 });
 
     const parts   = interaction.customId.split('_');
     const userId  = parts[2];
     const pozitie = parts.slice(3).join('_').replace(/_/g,' ');
 
     const member = guild.members.cache.get(userId);
-    if (!member) return interaction.reply({ content: '❌ Utilizatorul nu mai e pe server.', ephemeral: true });
+    if (!member) return interaction.reply({ content: '❌ Utilizatorul nu mai e pe server.', flags: 64 });
 
     // Da rol pozitie
     const rolPoz = guild.roles.cache.find(r => r.name === pozitie);
@@ -1175,7 +1191,7 @@ client.on('interactionCreate', async interaction => {
 
   if (interaction.isButton() && interaction.customId.startsWith('apl_respinge_')) {
     const canReject = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
-    if (!canReject) return interaction.reply({ content: '❌ Nu ai permisiunea să respecți aplicații.', ephemeral: true });
+    if (!canReject) return interaction.reply({ content: '❌ Nu ai permisiunea să respecți aplicații.', flags: 64 });
 
     const userId = interaction.customId.split('_')[2];
     const member = guild.members.cache.get(userId);
@@ -1210,13 +1226,13 @@ client.on('interactionCreate', async interaction => {
   // /accept (slash command)
   if (commandName === 'accept') {
     const canAccept = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
-    if (!canAccept) return interaction.reply({ content: '❌ Doar ' + GRADE_RECRUTARE.join(', ') + ' pot accepta membri.', ephemeral: true });
+    if (!canAccept) return interaction.reply({ content: '❌ Doar ' + GRADE_RECRUTARE.join(', ') + ' pot accepta membri.', flags: 64 });
 
     const target  = interaction.options.getUser('user');
     const pozitie = interaction.options.getString('pozitie');
     const mesaj   = interaction.options.getString('mesaj') || '';
     const member  = guild.members.cache.get(target.id);
-    if (!member) return interaction.reply({ content: '❌ Utilizatorul nu e pe server.', ephemeral: true });
+    if (!member) return interaction.reply({ content: '❌ Utilizatorul nu e pe server.', flags: 64 });
 
     const rolPoz      = guild.roles.cache.find(r => r.name === pozitie);
     const rolAplicant = guild.roles.cache.find(r => r.name === '📥 Aplicant');
@@ -1245,13 +1261,13 @@ client.on('interactionCreate', async interaction => {
 
     return interaction.reply({ embeds: [new EmbedBuilder()
       .setColor(GREEN).setDescription(`✓ <@${target.id}> a fost acceptat ca **${pozitie}**.`)
-    ], ephemeral: true });
+    ], flags: 64 });
   }
 
   // /respinge (slash command)
   if (commandName === 'respinge') {
     const canReject = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
-    if (!canReject) return interaction.reply({ content: '❌ Doar ' + GRADE_RECRUTARE.join(', ') + ' pot respinge aplicanți.', ephemeral: true });
+    if (!canReject) return interaction.reply({ content: '❌ Doar ' + GRADE_RECRUTARE.join(', ') + ' pot respinge aplicanți.', flags: 64 });
 
     const target = interaction.options.getUser('user');
     const motiv  = interaction.options.getString('motiv') || 'Niciun motiv specificat.';
@@ -1278,16 +1294,16 @@ client.on('interactionCreate', async interaction => {
 
     return interaction.reply({ embeds: [new EmbedBuilder()
       .setColor(RED).setDescription(`✓ <@${target.id}> a fost respins. Motiv: ${motiv}`)
-    ], ephemeral: true });
+    ], flags: 64 });
   }
 
   // /aplicatii
   if (commandName === 'aplicatii') {
     const canView = guild.members.cache.get(interaction.user.id)?.roles.cache.some(r => GRADE_RECRUTARE.includes(r.name));
-    if (!canView) return interaction.reply({ content: '❌ Acces restricționat.', ephemeral: true });
+    if (!canView) return interaction.reply({ content: '❌ Acces restricționat.', flags: 64 });
 
     const { data } = await sb.from('aplicatii').select('*').eq('status','nou').order('created_at',{ascending:false}).limit(10);
-    if (!data?.length) return interaction.reply({ embeds: [new EmbedBuilder().setColor(GREEN).setDescription('✓ Nu există aplicații noi.')], ephemeral: true });
+    if (!data?.length) return interaction.reply({ embeds: [new EmbedBuilder().setColor(GREEN).setDescription('✓ Nu există aplicații noi.')], flags: 64 });
 
     const embed = new EmbedBuilder()
       .setColor(YELLOW)
@@ -1298,14 +1314,14 @@ client.on('interactionCreate', async interaction => {
       ].join(' · ')).join('\n'))
       .setFooter({ text: `Mergi în ${CH_APL_ADMIN ? '#aplicații-primite' : 'canalul admin'} pentru detalii` });
 
-    return interaction.reply({ embeds: [embed], ephemeral: true });
+    return interaction.reply({ embeds: [embed], flags: 64 });
   }
 
   // /whois
   if (commandName === 'whois') {
     const target = interaction.options.getUser('user');
     const member = guild.members.cache.get(target.id);
-    if (!member) return interaction.reply({ content: '❌ Utilizatorul nu e pe server.', ephemeral: true });
+    if (!member) return interaction.reply({ content: '❌ Utilizatorul nu e pe server.', flags: 64 });
 
     const roluri = member.roles.cache.filter(r => r.name !== '@everyone').map(r => r.name).join(', ') || 'Niciun rol';
     const embed = new EmbedBuilder()
@@ -1320,7 +1336,7 @@ client.on('interactionCreate', async interaction => {
       )
       .setFooter({ text: `ID: ${target.id}` });
 
-    return interaction.reply({ embeds: [embed], ephemeral: true });
+    return interaction.reply({ embeds: [embed], flags: 64 });
   }
 
   // /statistici
@@ -1372,7 +1388,7 @@ client.on('interactionCreate', async interaction => {
     const query = interaction.options.getString('nume').toLowerCase();
     const found = MISIUNI.find(m => m.titlu.toLowerCase().includes(query));
     if (!found) {
-      await interaction.reply({ embeds:[new EmbedBuilder().setColor(RED).setDescription(`✗ Nicio misiune găsită pentru **"${query}"**`)], ephemeral:true });
+      await interaction.reply({ embeds:[new EmbedBuilder().setColor(RED).setDescription(`✗ Nicio misiune găsită pentru **"${query}"**`)], flags: 64 });
       return;
     }
     const embed = new EmbedBuilder().setColor(CAT_COLORS[found.cat]||RED)
@@ -1452,7 +1468,7 @@ client.on('interactionCreate', async interaction => {
 
     const ch = guild.channels.cache.get(CH_ALERTE);
     if (ch) await ch.send({ content:'@here', embeds:[embed] });
-    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ Alertă vehicul trimisă!')], ephemeral:true });
+    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ Alertă vehicul trimisă!')], flags: 64 });
   }
 
   // /persoana-alert
@@ -1484,7 +1500,7 @@ client.on('interactionCreate', async interaction => {
 
     const ch = guild.channels.cache.get(CH_ALERTE);
     if (ch) await ch.send({ content:'@here', embeds:[embed] });
-    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ Alertă persoană trimisă!')], ephemeral:true });
+    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ Alertă persoană trimisă!')], flags: 64 });
   }
 
   // /sos
@@ -1507,7 +1523,7 @@ client.on('interactionCreate', async interaction => {
 
     const ch = guild.channels.cache.get(CH_ALERTE);
     if (ch) await ch.send({ content:`🆘 ${pinguri} 🆘`, embeds:[embed] });
-    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ SOS trimis! Superiorii au fost alertați.')], ephemeral:true });
+    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription('✓ SOS trimis! Superiorii au fost alertați.')], flags: 64 });
   }
 
   // /teren-on
@@ -1536,7 +1552,7 @@ client.on('interactionCreate', async interaction => {
     }
 
     await updateTerenMesaj(guild);
-    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription(`✓ Ești acum **pe teren** la ${locatie}. Echipa a fost notificată.`)], ephemeral:true });
+    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription(`✓ Ești acum **pe teren** la ${locatie}. Echipa a fost notificată.`)], flags: 64 });
   }
 
   // /teren-off
@@ -1548,7 +1564,7 @@ client.on('interactionCreate', async interaction => {
     const info    = peTerenAcum[user.id];
 
     if (!info) {
-      await interaction.reply({ embeds:[new EmbedBuilder().setColor(RED).setDescription('✗ Nu ești înregistrat pe teren. Folosește `/teren-on` mai întâi.')], ephemeral:true });
+      await interaction.reply({ embeds:[new EmbedBuilder().setColor(RED).setDescription('✗ Nu ești înregistrat pe teren. Folosește `/teren-on` mai întâi.')], flags: 64 });
       return;
     }
 
@@ -1574,14 +1590,14 @@ client.on('interactionCreate', async interaction => {
     }
 
     await updateTerenMesaj(guild);
-    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription(`✓ Misiune încheiată. Timp pe teren: **${timp}**`)], ephemeral:true });
+    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription(`✓ Misiune încheiată. Timp pe teren: **${timp}**`)], flags: 64 });
   }
 
   // /teren-status
   if (commandName === 'teren-status') {
     const activi = Object.values(peTerenAcum);
     if (!activi.length) {
-      await interaction.reply({ embeds:[new EmbedBuilder().setColor(0x374151).setDescription('*Niciun reporter pe teren în acest moment.*')], ephemeral:true });
+      await interaction.reply({ embeds:[new EmbedBuilder().setColor(0x374151).setDescription('*Niciun reporter pe teren în acest moment.*')], flags: 64 });
       return;
     }
     const embed = new EmbedBuilder().setColor(RED).setTitle('📡 TEREN STATUS')
@@ -1598,15 +1614,25 @@ client.on('interactionCreate', async interaction => {
 
   // /creaza-echipa
   if (commandName === 'creaza-echipa') {
-    // Verifică grade
     const member = await guild.members.fetch(interaction.user.id);
     const areGrad = member.roles.cache.some(r => GRADE_SUPERIOARE.includes(r.name));
     if (!areGrad) {
-      await interaction.reply({ embeds:[new EmbedBuilder().setColor(RED).setDescription('✗ Nu ai permisiunea să creezi echipe. Necesită grad de Reporter sau mai mare.')], ephemeral:true });
+      await interaction.reply({ embeds:[new EmbedBuilder().setColor(RED).setDescription('✗ Nu ai permisiunea să creezi echipe. Necesită grad de Reporter sau mai mare.')], flags: 64 });
       return;
     }
     await interaction.deferReply({ ephemeral:true });
     await creeazaEchipa(interaction, guild);
+  }
+  } catch(e) {
+    console.error('Interaction error:', e.message);
+    try {
+      const errEmbed = new EmbedBuilder().setColor(RED).setDescription('❌ A apărut o eroare. Încearcă din nou.');
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ embeds: [errEmbed] }).catch(()=>{});
+      } else if (interaction.isRepliable()) {
+        await interaction.reply({ embeds: [errEmbed], flags: 64 }).catch(()=>{});
+      }
+    } catch(_) {}
   }
 });
 

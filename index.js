@@ -36,7 +36,7 @@ const PURPLE = 0xa78bfa;
 const BLUE   = 0x60a5fa;
 
 // ── GRADE CU PERMISIUNI SA CREEZE ECHIPE ────────────────
-const GRADE_SUPERIOARE = ['👑 Fondator','🎙️ Șef Redacție','🔐 Admin','⚖️ Editor Șef','📹 Reporter','🔍 Investigator'];
+const GRADE_SUPERIOARE = ['👁️ Fondator Regorder','🔱 Director General','⚡ Director Editorial','🔐 Administrator','🎙️ Șef Redacție','⚖️ Editor Șef','📹 Reporter Activ','🔍 Investigator'];
 
 // ── MISIUNI ──────────────────────────────────────────────
 const MISIUNI = [
@@ -70,8 +70,8 @@ async function adaugaPuncte(userId, username, minutePeTeren) {
     const puncte = Math.floor(minutePeTeren / 60); // 1h = 1 punct
     if (puncte <= 0) return;
     const sapt = getWeekKey();
-    const { data } = await sb.from('puncte_teren').select('*')
-      .eq('user_id', userId).eq('saptamana', sapt).single().catch(() => ({ data: null }));
+    let data = null;
+    try { const r = await sb.from('puncte_teren').select('*').eq('user_id', userId).eq('saptamana', sapt).single(); data = r.data; } catch(e) {}
     if (data) {
       await sb.from('puncte_teren').update({
         puncte: data.puncte + puncte,
@@ -160,7 +160,7 @@ let CH_WELCOME   = null;  // canal welcome pentru noi veniti
 let ROLE_APLICANT = null; // rol dat automat la intrare
 
 // Grade care pot accepta/respinge aplicatii
-const GRADE_RECRUTARE = ['👑 Fondator', '🎙️ Șef Redacție', '🔐 Admin', '⚖️ Editor Șef'];
+const GRADE_RECRUTARE = ['👁️ Fondator Regorder', '🔱 Director General', '⚡ Director Editorial', '🔐 Administrator', '🎙️ Șef Redacție', '⚖️ Editor Șef'];
 
 // Pozitii disponibile pentru aplicare
 const POZITII_APLICARE = [
@@ -699,13 +699,15 @@ function buildTemplateBriefing() {
 // ── SETUP ROLURI ─────────────────────────────────────────
 async function setupRoluri(guild) {
   const ROLURI = [
-    { name:'👑 Fondator',             color:0xC0181A, hoist:true,  mentionable:true  },
-    { name:'🎙️ Șef Redacție',         color:0xC0181A, hoist:true,  mentionable:true  },
-    { name:'🔐 Admin',                color:0xff4444, hoist:true,  mentionable:true  },
+    { name:'👁️ Fondator Regorder',    color:0xC0181A, hoist:true,  mentionable:true  },
+    { name:'🔱 Director General',     color:0xC0181A, hoist:true,  mentionable:true  },
+    { name:'⚡ Director Editorial',   color:0xC0181A, hoist:true,  mentionable:true  },
+    { name:'🔐 Administrator',        color:0xff4444, hoist:true,  mentionable:true  },
+    { name:'🎙️ Șef Redacție',         color:0xfb923c, hoist:true,  mentionable:true  },
     { name:'⚖️ Editor Șef',           color:0xfb923c, hoist:true,  mentionable:true  },
-    { name:'📹 Reporter',             color:0xf59e0b, hoist:true,  mentionable:true  },
-    { name:'✍️ Editor',               color:0xf59e0b, hoist:false, mentionable:true  },
+    { name:'📹 Reporter Activ',       color:0xf59e0b, hoist:true,  mentionable:true  },
     { name:'🔍 Investigator',         color:0x60a5fa, hoist:true,  mentionable:true  },
+    { name:'✍️ Editor',               color:0xf59e0b, hoist:false, mentionable:true  },
     { name:'📸 Fotograf',             color:0x60a5fa, hoist:false, mentionable:true  },
     { name:'🎬 Cameraman',            color:0x60a5fa, hoist:false, mentionable:true  },
     { name:'🎙️ Narator',              color:0xa78bfa, hoist:false, mentionable:true  },
@@ -2049,5 +2051,93 @@ client.once('clientReady', async () => {
 client.on('guildMemberAdd', async member => {
   try { await welcomeMembru(member); } catch(e) { console.error('Welcome error:', e.message); }
 });
+
+
+// ── POLLING SUPABASE — Aplicații site + Donații ──────────
+let lastAplicatieCheck = new Date().toISOString();
+let lastMesajCheck     = new Date().toISOString();
+
+async function pollAplicatii() {
+  try {
+    const guild = client.guilds.cache.first();
+    if (!guild) return;
+
+    // Check aplicatii noi de pe site
+    const { data: aplicatii } = await sb.from('aplicatii')
+      .select('*').eq('status','nou').gt('created_at', lastAplicatieCheck)
+      .order('created_at', { ascending: true });
+
+    if (aplicatii?.length) {
+      lastAplicatieCheck = aplicatii[aplicatii.length-1].created_at;
+      const chAdmin = guild.channels.cache.get(CH_APL_ADMIN);
+      if (!chAdmin) return;
+
+      for (const a of aplicatii) {
+        const embed = new EmbedBuilder()
+          .setColor(0xf59e0b)
+          .setAuthor({ name: 'REGORDER · APLICAȚIE NOUĂ DE PE SITE', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+          .setTitle('📥 CANDIDATURĂ PRIMITĂ')
+          .addFields(
+            { name: '👤 Nume', value: a.nume || '—', inline: true },
+            { name: '🎯 Poziție', value: a.pozitie || '—', inline: true },
+            { name: '📞 Contact', value: a.telefon || '—', inline: true },
+            { name: '💼 Experiență', value: (a.experienta || '—').slice(0,400), inline: false },
+            { name: '💬 Scrisoare', value: (a.scrisoare || '—').slice(0,400), inline: false },
+          )
+          .setDescription('> Aplicație trimisă prin **regorder.live/cariere**')
+          .setFooter({ text: `${new Date(a.created_at).toLocaleDateString('ro-RO', {day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})}` })
+          .setTimestamp();
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('apl_accept_' + a.id + '_' + (a.pozitie||'Colaborator')).setLabel('✓ ACCEPTĂ').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId('apl_respinge_' + a.id).setLabel('✗ RESPINGE').setStyle(ButtonStyle.Danger),
+        );
+
+        // Ping roluri
+        const roleAdmin = guild.roles.cache.find(r => r.name === '🔐 Administrator');
+        const roleSef   = guild.roles.cache.find(r => r.name === '🎙️ Șef Redacție');
+        const pingStr   = [roleAdmin, roleSef].filter(Boolean).map(r => `<@&${r.id}>`).join(' ');
+
+        await chAdmin.send({ content: pingStr ? pingStr + ' — Aplicație nouă!' : null, embeds: [embed], components: [row] });
+      }
+    }
+
+    // Check mesaje donatie noi
+    const { data: mesaje } = await sb.from('mesaje_contact')
+      .select('*').eq('status','nou').gt('created_at', lastMesajCheck)
+      .order('created_at', { ascending: true });
+
+    if (mesaje?.length) {
+      lastMesajCheck = mesaje[mesaje.length-1].created_at;
+      // Post in aplicatii-primite or a general admin channel
+      const chAdmin = guild.channels.cache.get(CH_APL_ADMIN);
+      if (!chAdmin) return;
+
+      for (const m of mesaje) {
+        const embed = new EmbedBuilder()
+          .setColor(0x3b82f6)
+          .setAuthor({ name: 'REGORDER · CERERE DONAȚIE', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+          .setTitle('💰 CERERE DE DONAȚIE')
+          .addFields(
+            { name: '👤 Nume', value: m.nume || '—', inline: true },
+            { name: '📧 Contact', value: m.email || '—', inline: true },
+            { name: '💬 Mesaj', value: (m.mesaj || '—').slice(0,500), inline: false },
+          )
+          .setDescription('> Mesaj trimis prin **regorder.live/sustinatori**')
+          .setFooter({ text: new Date(m.created_at).toLocaleDateString('ro-RO', {day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'}) })
+          .setTimestamp();
+
+        const roleDir = guild.roles.cache.find(r => r.name === '🔱 Director General');
+        const roleFond = guild.roles.cache.find(r => r.name === '👁️ Fondator Regorder');
+        const pingStr = [roleFond, roleDir].filter(Boolean).map(r => `<@&${r.id}>`).join(' ');
+
+        await chAdmin.send({ content: pingStr ? pingStr + ' — Cerere donație nouă!' : null, embeds: [embed] });
+      }
+    }
+  } catch(e) { console.error('Poll error:', e.message); }
+}
+
+// Poll la fiecare 30 secunde
+setInterval(pollAplicatii, 30000);
 
 client.login(TOKEN);

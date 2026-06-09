@@ -64,6 +64,43 @@ const MISIUNI = [
 const peTerenAcum = {};
 let terenMesajId = null; // ID-ul mesajului principal de status
 
+// ── PUNCTE TEREN ─────────────────────────────────────────
+async function adaugaPuncte(userId, username, minutePeTeren) {
+  try {
+    const puncte = Math.floor(minutePeTeren / 60); // 1h = 1 punct
+    if (puncte <= 0) return;
+    const sapt = getWeekKey();
+    const { data } = await sb.from('puncte_teren').select('*')
+      .eq('user_id', userId).eq('saptamana', sapt).single().catch(() => ({ data: null }));
+    if (data) {
+      await sb.from('puncte_teren').update({
+        puncte: data.puncte + puncte,
+        minute: data.minute + minutePeTeren,
+        username
+      }).eq('id', data.id);
+    } else {
+      await sb.from('puncte_teren').insert({
+        user_id: userId, username, puncte, minute: minutePeTeren,
+        saptamana: sapt, created_at: new Date().toISOString()
+      });
+    }
+  } catch(e) { console.error('Puncte error:', e.message); }
+}
+
+function getWeekKey() {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0,0,0,0);
+  start.setDate(now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1));
+  return start.toISOString().slice(0,10);
+}
+
+function formatTimp(min) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h > 0 ? `${h}h ${m}min` : `${m}min`;
+}
+
 async function updateTerenMesaj(guild) {
   const ch = guild.channels.cache.get(CH_TEREN);
   if (!ch) return;
@@ -71,31 +108,36 @@ async function updateTerenMesaj(guild) {
   const activi = Object.values(peTerenAcum);
 
   const embed = new EmbedBuilder()
-    .setColor(activi.length > 0 ? RED : 0x374151)
-    .setTitle('📡 REPORTERI ACTIVI PE TEREN')
+    .setColor(activi.length > 0 ? RED : 0x1a1a2e)
+    .setAuthor({ name: 'REGORDER · TEREN LIVE', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+    .setTitle(activi.length > 0 ? '🔴 REPORTERI ACTIVI PE TEREN' : '⬛ NICIUN REPORTER ACTIV')
     .setTimestamp();
 
   if (activi.length === 0) {
-    embed.setDescription('*Niciun reporter pe teren în acest moment.*');
+    embed.setDescription('*Serverul e în standby. Folosește `/teren-on` pentru a anunța o misiune.*');
   } else {
-    embed.setDescription(
-      activi.map(r => {
-        const elapsed = Math.floor((Date.now() - r.startTime) / 60000);
-        const ore = Math.floor(elapsed / 60);
-        const min = elapsed % 60;
-        const timp = ore > 0 ? `${ore}h ${min}min` : `${min} min`;
-        return `🔴 **${r.nume}**\n📍 ${r.locatie}${r.misiune ? `\n🎯 ${r.misiune}` : ''}\n⏱️ Pe teren de **${timp}**`;
-      }).join('\n\n')
-    );
-    embed.setFooter({ text: `${activi.length} reporter${activi.length > 1 ? 'i' : ''} activ${activi.length > 1 ? 'i' : ''} · Actualizat` });
+    embed.setDescription(activi.map((r, i) => {
+      const elapsed = Math.floor((Date.now() - r.startTime) / 60000);
+      const timp = formatTimp(elapsed);
+      const punct_preview = Math.floor(elapsed / 60);
+      return [
+        `**${i+1}. ${r.nume}**`,
+        `┣ 📍 **Locație:** ${r.locatie}`,
+        r.misiune ? `┣ 🎯 **Misiune:** ${r.misiune}` : null,
+        `┣ ⏱️ **Timp activ:** ${timp}`,
+        `┗ ⭐ **Puncte acumulate:** ${punct_preview}p`,
+      ].filter(Boolean).join('\n');
+    }).join('\n\n'));
+    embed.addFields({ name: '━━━━━━━━━━━━━━━━━━━━━━', value: `📊 **${activi.length}** reporter${activi.length > 1 ? 'i' : ''} activ${activi.length > 1 ? 'i' : ''} · 1h = 1 punct`, inline: false });
   }
+
+  embed.setFooter({ text: 'REGORDER · Investigații independente · regorder.live' });
 
   try {
     if (terenMesajId) {
       const msg = await ch.messages.fetch(terenMesajId).catch(() => null);
       if (msg) { await msg.edit({ embeds: [embed] }); return; }
     }
-    // Daca nu exista mesajul, creeaza unul nou
     const msg = await ch.send({ embeds: [embed] });
     terenMesajId = msg.id;
   } catch(e) { console.error('Eroare update teren:', e.message); }
@@ -746,6 +788,9 @@ async function registerCommands(guild) {
       .addStringOption(o => o.setName('raport').setDescription('Scurt raport — ce ai găsit').setRequired(false)),
 
     new SlashCommandBuilder().setName('teren-status').setDescription('Vezi cine e activ pe teren acum'),
+
+    new SlashCommandBuilder().setName('clasament').setDescription('Clasament săptămânal ore teren — 1h = 1 punct'),
+    new SlashCommandBuilder().setName('puncte').setDescription('Vezi punctele tale de teren'),
 
     new SlashCommandBuilder().setName('creaza-echipa').setDescription('Creează o echipă de investigație')
       .addStringOption(o => o.setName('nume').setDescription('Numele echipei').setRequired(true))
@@ -1545,14 +1590,27 @@ client.on('interactionCreate', async interaction => {
     if (ch) {
       await ch.send({ embeds: [new EmbedBuilder()
         .setColor(GREEN)
-        .setDescription(`🟢 **${nume}** a intrat pe teren\n📍 **${locatie}**${misiune ? `\n🎯 ${misiune}` : ''}\n⏰ ${new Date().toLocaleTimeString('ro-RO', {hour:'2-digit',minute:'2-digit'})}`)
-        .setFooter({ text: 'REGORDER · Teren Live' })
+        .setAuthor({ name: 'REGORDER · CHECK-IN TEREN', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+        .setTitle('🟢 REPORTER ACTIV')
+        .addFields(
+          { name: '👤 Reporter', value: `**${nume}**`, inline: true },
+          { name: '📍 Locație', value: `**${locatie}**`, inline: true },
+          { name: '⏰ Check-in', value: `**${new Date().toLocaleTimeString('ro-RO', {hour:'2-digit',minute:'2-digit'})}**`, inline: true },
+          misiune ? { name: '🎯 Misiune', value: misiune, inline: false } : { name: '​', value: '​', inline: false }
+        )
+        .setDescription('> Reporterul a intrat pe teren. Echipa a fost notificată.')
+        .setFooter({ text: 'REGORDER · 1 oră activă = 1 punct · regorder.live' })
         .setTimestamp()
       ]});
     }
 
     await updateTerenMesaj(guild);
-    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription(`✓ Ești acum **pe teren** la ${locatie}. Echipa a fost notificată.`)], flags: 64 });
+    await interaction.reply({ embeds:[new EmbedBuilder()
+      .setColor(GREEN)
+      .setTitle('✓ CHECK-IN CONFIRMAT')
+      .setDescription(`Ești acum **pe teren** la **${locatie}**.\n\nEchipa a fost notificată. La finalul misiunii folosește \`/teren-off\`.\n\n> ⭐ Fiecare oră pe teren = **1 punct** în clasament.`)
+      .setFooter({ text: 'REGORDER · Teren Live' })
+    ], flags: 64 });
   }
 
   // /teren-off
@@ -1579,18 +1637,36 @@ client.on('interactionCreate', async interaction => {
     const rolActiv = guild.roles.cache.find(r => r.name === '🟢 Activ');
     if (rolActiv && member.roles.cache.has(rolActiv.id)) await member.roles.remove(rolActiv).catch(()=>{});
 
+    // Salveaza puncte
+    await adaugaPuncte(user.id, nume, elapsed);
+    const puncteCastigate = Math.floor(elapsed / 60);
+
     const ch = guild.channels.cache.get(CH_TEREN);
     if (ch) {
       await ch.send({ embeds: [new EmbedBuilder()
         .setColor(0x374151)
-        .setDescription(`⬛ **${nume}** a revenit din teren\n📍 **${info.locatie}** · ⏱️ **${timp}**${raport ? `\n📋 *${raport}*` : ''}`)
-        .setFooter({ text: 'REGORDER · Teren Live' })
+        .setAuthor({ name: 'REGORDER · CHECK-OUT TEREN', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+        .setTitle('⬛ REPORTER REVENIT')
+        .addFields(
+          { name: '👤 Reporter', value: `**${nume}**`, inline: true },
+          { name: '📍 Locație', value: `**${info.locatie}**`, inline: true },
+          { name: '⏱️ Timp activ', value: `**${timp}**`, inline: true },
+          { name: '⭐ Puncte câștigate', value: `**${puncteCastigate}p**`, inline: true },
+          raport ? { name: '📋 Raport', value: raport, inline: false } : { name: '​', value: '​', inline: false }
+        )
+        .setDescription('> Misiunea s-a încheiat. Punctele au fost adăugate în clasament.')
+        .setFooter({ text: 'REGORDER · regorder.live' })
         .setTimestamp()
       ]});
     }
 
     await updateTerenMesaj(guild);
-    await interaction.reply({ embeds:[new EmbedBuilder().setColor(GREEN).setDescription(`✓ Misiune încheiată. Timp pe teren: **${timp}**`)], flags: 64 });
+    await interaction.reply({ embeds:[new EmbedBuilder()
+      .setColor(GREEN)
+      .setTitle('✓ MISIUNE ÎNCHEIATĂ')
+      .setDescription(`**Timp pe teren:** ${timp}\n**Puncte câștigate:** ${puncteCastigate}p\n\n> Folosește \`/clasament\` pentru a vedea clasamentul săptămânii.`)
+      .setFooter({ text: 'REGORDER · Teren Live' })
+    ], flags: 64 });
   }
 
   // /teren-status
@@ -1610,6 +1686,76 @@ client.on('interactionCreate', async interaction => {
       }).join('\n\n'))
       .setFooter({ text: `${activi.length} reporter${activi.length>1?'i':''} activ${activi.length>1?'i':''}` });
     await interaction.reply({ embeds:[embed] });
+  }
+
+  // /clasament
+  if (commandName === 'clasament') {
+    const sapt = getWeekKey();
+    const { data } = await sb.from('puncte_teren').select('*')
+      .eq('saptamana', sapt).order('puncte', { ascending: false }).limit(15);
+
+    if (!data?.length) {
+      await interaction.reply({ embeds:[new EmbedBuilder()
+        .setColor(RED)
+        .setTitle('📊 CLASAMENT SĂPTĂMÂNAL')
+        .setDescription('*Niciun punct înregistrat săptămâna aceasta.*\n\nFolosește `/teren-on` și `/teren-off` pentru a acumula puncte!')
+        .setFooter({ text: `Săptămâna: ${sapt} · 1h teren = 1 punct` })
+      ], flags: 64 });
+      return;
+    }
+
+    const medals = ['🥇','🥈','🥉'];
+    const rows = data.map((r, i) => {
+      const medal = medals[i] || `**${i+1}.**`;
+      const ore = Math.floor(r.minute / 60);
+      const min = r.minute % 60;
+      return `${medal} **${r.username}** — ${r.puncte}p *(${ore}h ${min}min)*`;
+    }).join('\n');
+
+    await interaction.reply({ embeds:[new EmbedBuilder()
+      .setColor(RED)
+      .setAuthor({ name: 'REGORDER · CLASAMENT', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+      .setTitle('📊 CLASAMENT SĂPTĂMÂNAL — TEREN')
+      .setDescription(rows)
+      .addFields({ name: '━━━━━━━━━━━━━━━━━━━━━━', value: '> ⭐ 1 oră activă pe teren = **1 punct**\n> Clasamentul se resetează în fiecare **luni dimineață**.', inline: false })
+      .setFooter({ text: `Săptămâna: ${sapt}` })
+      .setTimestamp()
+    ]});
+    return;
+  }
+
+  // /puncte
+  if (commandName === 'puncte') {
+    const sapt = getWeekKey();
+    const userId = interaction.user.id;
+    const { data } = await sb.from('puncte_teren').select('*')
+      .eq('user_id', userId).eq('saptamana', sapt).single().catch(() => ({ data: null }));
+
+    const { data: allTime } = await sb.from('puncte_teren').select('puncte, minute')
+      .eq('user_id', userId);
+    const totalPuncte = (allTime||[]).reduce((s,r) => s + (r.puncte||0), 0);
+    const totalMinute = (allTime||[]).reduce((s,r) => s + (r.minute||0), 0);
+
+    const saptPuncte = data?.puncte || 0;
+    const saptMinute = data?.minute || 0;
+    const oreS = Math.floor(saptMinute / 60);
+    const minS = saptMinute % 60;
+    const oreT = Math.floor(totalMinute / 60);
+    const minT = totalMinute % 60;
+
+    await interaction.reply({ embeds:[new EmbedBuilder()
+      .setColor(RED)
+      .setAuthor({ name: 'REGORDER · PUNCTELE TALE', iconURL: 'https://wrjvymujwjsjytigzdua.supabase.co/storage/v1/object/public/regorder/logo/regorder-lockup-transparent.png' })
+      .setTitle(`⭐ ${interaction.user.username}`)
+      .addFields(
+        { name: '📅 Săptămâna aceasta', value: `**${saptPuncte}p** (${oreS}h ${minS}min)`, inline: true },
+        { name: '🏆 Total all-time', value: `**${totalPuncte}p** (${oreT}h ${minT}min)`, inline: true },
+      )
+      .setDescription('> Folosește `/clasament` pentru a vedea top-ul săptămânii.')
+      .setFooter({ text: `Săptămâna: ${sapt} · 1h = 1 punct` })
+      .setTimestamp()
+    ], flags: 64 });
+    return;
   }
 
   // /creaza-echipa

@@ -2068,6 +2068,10 @@ client.once('clientReady', async () => {
 
   startScheduler(guild);
   console.log('✓ REGORDER Bot complet și gata!');
+
+  // Porneste polling dupa ce botul e gata
+  pollAplicatii(); // primul poll imediat
+  setInterval(pollAplicatii, 30000); // apoi la fiecare 30s
 });
 
 
@@ -2164,8 +2168,5 @@ async function pollAplicatii() {
     }
   } catch(e) { console.error('Poll error:', e.message); }
 }
-
-// Poll la fiecare 30 secunde
-setInterval(pollAplicatii, 30000);
 
 client.login(TOKEN);

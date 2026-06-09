@@ -36,7 +36,7 @@ const PURPLE = 0xa78bfa;
 const BLUE   = 0x60a5fa;
 
 // ── GRADE CU PERMISIUNI SA CREEZE ECHIPE ────────────────
-const GRADE_SUPERIOARE = ['👁️ Fondator Regorder','🔱 Director General','⚡ Director Editorial','🔐 Administrator','🎙️ Șef Redacție','⚖️ Editor Șef','📹 Reporter Activ','🔍 Investigator'];
+const GRADE_SUPERIOARE = ['👑 Fondator','🔱 Director General','⚡ Director Editorial','🔐 Administrator','🎙️ Șef Redacție','⚖️ Editor Șef','📹 Reporter Activ','🔍 Investigator'];
 
 // ── MISIUNI ──────────────────────────────────────────────
 const MISIUNI = [
@@ -699,7 +699,6 @@ function buildTemplateBriefing() {
 // ── SETUP ROLURI ─────────────────────────────────────────
 async function setupRoluri(guild) {
   const ROLURI = [
-    { name:'👁️ Fondator Regorder',    color:0xC0181A, hoist:true,  mentionable:true  },
     { name:'🔱 Director General',     color:0xC0181A, hoist:true,  mentionable:true  },
     { name:'⚡ Director Editorial',   color:0xC0181A, hoist:true,  mentionable:true  },
     { name:'🔐 Administrator',        color:0xff4444, hoist:true,  mentionable:true  },
@@ -761,7 +760,7 @@ async function setupRoluri(guild) {
     await guild.roles.fetch();
     const pozitii = [];
     const gradeOrdine = [
-      '👁️ Fondator Regorder', '🔱 Director General', '⚡ Director Editorial',
+      '🔱 Director General', '⚡ Director Editorial',
       '🔐 Administrator', '🎙️ Șef Redacție', '⚖️ Editor Șef',
       '📹 Reporter Activ', '🔍 Investigator'
     ];
@@ -2158,7 +2157,7 @@ async function pollAplicatii() {
           .setTimestamp();
 
         const roleDir = guild.roles.cache.find(r => r.name === '🔱 Director General');
-        const roleFond = guild.roles.cache.find(r => r.name === '👁️ Fondator Regorder');
+        const roleFond = guild.roles.cache.find(r => r.name === '👑 Fondator');
         const pingStr = [roleFond, roleDir].filter(Boolean).map(r => `<@&${r.id}>`).join(' ');
 
         await chAdmin.send({ content: pingStr ? pingStr + ' — Cerere donație nouă!' : null, embeds: [embed] });

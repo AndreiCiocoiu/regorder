@@ -2078,22 +2078,17 @@ client.on('guildMemberAdd', async member => {
 
 
 // ── POLLING SUPABASE — Aplicații site + Donații ──────────
-// Start from 24h ago to catch recent unprocessed entries
-const _24hAgo = new Date(Date.now() - 24*60*60*1000).toISOString();
-let lastAplicatieCheck = _24hAgo;
-let lastMesajCheck     = _24hAgo;
-
 async function pollAplicatii() {
   try {
     const guild = client.guilds.cache.first();
     if (!guild) return;
 
-    // Check aplicatii noi de pe site
+    // Check aplicatii nenotificate
     const { data: aplicatii, error: aplErr } = await sb.from('aplicatii')
-      .select('*').eq('status','nou').gt('created_at', lastAplicatieCheck)
-      .order('created_at', { ascending: true });
-    if (aplErr) console.error('Poll aplicatii error:', aplErr.message);
-    if (aplicatii?.length) console.log('Aplicatii noi:', aplicatii.length);
+      .select('*').eq('notificat_discord', false)
+      .order('created_at', { ascending: true }).limit(5);
+    if (aplErr) { console.error('Poll aplicatii error:', aplErr.message); }
+    else if (aplicatii?.length) console.log('Aplicatii noi:', aplicatii.length);
 
     if (aplicatii?.length) {
       lastAplicatieCheck = aplicatii[aplicatii.length-1].created_at;
@@ -2128,16 +2123,17 @@ async function pollAplicatii() {
         const pingStr   = [roleAdmin, roleSef].filter(Boolean).map(r => `<@&${r.id}>`).join(' ');
 
         await chAdmin.send({ content: pingStr ? pingStr + ' — Aplicație nouă!' : null, embeds: [embed], components: [row] });
+        // Mark as notified
+        await sb.from('aplicatii').update({ notificat_discord: true }).eq('id', a.id);
       }
     }
 
     // Check mesaje donatie noi
     const { data: mesaje } = await sb.from('mesaje_contact')
-      .select('*').eq('status','nou').gt('created_at', lastMesajCheck)
-      .order('created_at', { ascending: true });
+      .select('*').eq('notificat_discord', false)
+      .order('created_at', { ascending: true }).limit(5);
 
     if (mesaje?.length) {
-      lastMesajCheck = mesaje[mesaje.length-1].created_at;
       // Post in aplicatii-primite or a general admin channel
       let chAdmin2 = guild.channels.cache.get(CH_APL_ADMIN);
       if (!chAdmin2) chAdmin2 = guild.channels.cache.find(c => c.name === '🔏・aplicații-primite');
@@ -2163,6 +2159,7 @@ async function pollAplicatii() {
         const pingStr = [roleFond, roleDir].filter(Boolean).map(r => `<@&${r.id}>`).join(' ');
 
         await chAdmin.send({ content: pingStr ? pingStr + ' — Cerere donație nouă!' : null, embeds: [embed] });
+        await sb.from('mesaje_contact').update({ notificat_discord: true }).eq('id', m.id);
       }
     }
   } catch(e) { console.error('Poll error:', e.message); }

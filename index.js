@@ -2085,14 +2085,13 @@ client.on('guildMemberAdd', async member => {
 async function pollAplicatii() {
   try {
     const guild = client.guilds.cache.first();
-    if (!guild) return;
+    if (!guild) { console.log('Poll: guild null'); return; }
 
     // Check aplicatii nenotificate
     const { data: aplicatii, error: aplErr } = await sb.from('aplicatii')
       .select('*').eq('notificat_discord', false)
       .order('created_at', { ascending: true }).limit(5);
-    if (aplErr) { console.error('Poll aplicatii error:', aplErr.message); }
-    else if (aplicatii?.length) console.log('Aplicatii noi:', aplicatii.length);
+    console.log('Poll aplicatii:', aplicatii?.length || 0, 'nenotificate', aplErr ? 'ERR:'+aplErr.message : '');
 
     if (aplicatii?.length) {
       lastAplicatieCheck = aplicatii[aplicatii.length-1].created_at;

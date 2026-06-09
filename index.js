@@ -749,12 +749,36 @@ async function setupRoluri(guild) {
   for (const r of ROLURI) {
     if (!guild.roles.cache.find(x => x.name === r.name)) {
       try {
-        await guild.roles.create({ name:r.name, color:r.color, hoist:r.hoist, mentionable:r.mentionable, reason:'REGORDER setup' });
+        await guild.roles.create({ name:r.name, colors:r.color, hoist:r.hoist, mentionable:r.mentionable, reason:'REGORDER setup' });
         creat++;
-        await new Promise(r => setTimeout(r, 350));
+        await new Promise(res => setTimeout(res, 350));
       } catch(e) { console.error('Rol eroare:', r.name, e.message); }
     }
   }
+
+  // Seteaza pozitiile - grade mari sus
+  try {
+    await guild.roles.fetch();
+    const pozitii = [];
+    const gradeOrdine = [
+      '👁️ Fondator Regorder', '🔱 Director General', '⚡ Director Editorial',
+      '🔐 Administrator', '🎙️ Șef Redacție', '⚖️ Editor Șef',
+      '📹 Reporter Activ', '🔍 Investigator'
+    ];
+    // Gasim rolul bot ca referinta maxima
+    const botMember = guild.members.cache.get(guild.client.user.id);
+    const botRolPos = botMember?.roles?.highest?.position || 10;
+    let pos = botRolPos - 1;
+    for (const name of gradeOrdine) {
+      const rol = guild.roles.cache.find(r => r.name === name);
+      if (rol && pos > 0) {
+        pozitii.push({ role: rol.id, position: pos });
+        pos--;
+      }
+    }
+    if (pozitii.length) await guild.roles.setPositions(pozitii).catch(e => console.error('Pozitii error:', e.message));
+  } catch(e) { console.error('Setare pozitii error:', e.message); }
+
   console.log(`✓ Roluri: ${creat} create`);
 }
 
@@ -2054,8 +2078,10 @@ client.on('guildMemberAdd', async member => {
 
 
 // ── POLLING SUPABASE — Aplicații site + Donații ──────────
-let lastAplicatieCheck = new Date().toISOString();
-let lastMesajCheck     = new Date().toISOString();
+// Start from 24h ago to catch recent unprocessed entries
+const _24hAgo = new Date(Date.now() - 24*60*60*1000).toISOString();
+let lastAplicatieCheck = _24hAgo;
+let lastMesajCheck     = _24hAgo;
 
 async function pollAplicatii() {
   try {
@@ -2063,14 +2089,17 @@ async function pollAplicatii() {
     if (!guild) return;
 
     // Check aplicatii noi de pe site
-    const { data: aplicatii } = await sb.from('aplicatii')
+    const { data: aplicatii, error: aplErr } = await sb.from('aplicatii')
       .select('*').eq('status','nou').gt('created_at', lastAplicatieCheck)
       .order('created_at', { ascending: true });
+    if (aplErr) console.error('Poll aplicatii error:', aplErr.message);
+    if (aplicatii?.length) console.log('Aplicatii noi:', aplicatii.length);
 
     if (aplicatii?.length) {
       lastAplicatieCheck = aplicatii[aplicatii.length-1].created_at;
-      const chAdmin = guild.channels.cache.get(CH_APL_ADMIN);
-      if (!chAdmin) return;
+      let chAdmin = guild.channels.cache.get(CH_APL_ADMIN);
+      if (!chAdmin) chAdmin = guild.channels.cache.find(c => c.name === '🔏・aplicații-primite');
+      if (!chAdmin) { console.error('Canal aplicatii-primite negasit'); return; }
 
       for (const a of aplicatii) {
         const embed = new EmbedBuilder()
@@ -2110,8 +2139,10 @@ async function pollAplicatii() {
     if (mesaje?.length) {
       lastMesajCheck = mesaje[mesaje.length-1].created_at;
       // Post in aplicatii-primite or a general admin channel
-      const chAdmin = guild.channels.cache.get(CH_APL_ADMIN);
-      if (!chAdmin) return;
+      let chAdmin2 = guild.channels.cache.get(CH_APL_ADMIN);
+      if (!chAdmin2) chAdmin2 = guild.channels.cache.find(c => c.name === '🔏・aplicații-primite');
+      if (!chAdmin2) { console.error('Canal mesaje negasit'); return; }
+      const chAdmin = chAdmin2;
 
       for (const m of mesaje) {
         const embed = new EmbedBuilder()
